@@ -1,0 +1,50 @@
+server:
+  addr: ":8080"
+  readTimeout: 30s
+  writeTimeout: 60s
+
+temporal:
+  hostPort: "${TEMPORAL_HOST_PORT:-localhost:7233}"
+  namespace: "${TEMPORAL_NAMESPACE:-default}"
+  taskQueue: "deployment-workers"
+
+auth:
+  oidc:
+    issuer: "https://token.actions.githubusercontent.com"
+    audience: "${OIDC_AUDIENCE:-platform-orchestrator.example.com}"
+    jwksCacheTTL: 24h
+  allowedRepositories: []
+
+argocd:
+  serverURL: "${ARGOCD_SERVER_URL:-https://argocd.example.com}"
+  insecure: false
+
+oci:
+  registry: "${OCI_REGISTRY:-myregistry.azurecr.io}"
+  repositoryPrefix: ""
+
+github:
+  appID: 0
+  installationID: 0
+  token: "${GITHUB_TOKEN}"
+
+documentdb:
+  endpoint: "${DOCUMENTDB_ENDPOINT}"
+  database: "platform-orchestrator"
+  deploymentsCollection: "deployments"
+  eventsCollection: "deployment-events"
+
+otel:
+  serviceName: "platform-orchestrator"
+  otlpEndpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-localhost:4317}"
+  tracesSampleRate: 1.0
+  insecure: true
+
+policies:
+  configPath: "policies/default.yaml"
+
+deploymentDefaults:
+  syncTimeoutSeconds: 600
+  healthConvergenceTimeoutSeconds: 300
+  workflowTimeoutMinutes: 20
+  pollIntervalSeconds: 10

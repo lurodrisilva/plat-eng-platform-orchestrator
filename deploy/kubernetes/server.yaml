@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-orchestrator-server
+  labels:
+    app: platform-orchestrator
+    component: server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: platform-orchestrator
+      component: server
+  template:
+    metadata:
+      labels:
+        app: platform-orchestrator
+        component: server
+    spec:
+      serviceAccountName: platform-orchestrator
+      containers:
+        - name: server
+          image: myregistry.azurecr.io/platform-orchestrator-server:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: CONFIG_PATH
+              value: /etc/config/config.yaml
+            - name: OTEL_SERVICE_NAME
+              value: platform-orchestrator-server
+          envFrom:
+            - secretRef:
+                name: platform-orchestrator-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /etc/config
+            - name: policies
+              mountPath: /etc/policies
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: platform-orchestrator-config
+        - name: policies
+          configMap:
+            name: platform-orchestrator-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-orchestrator-server
+spec:
+  selector:
+    app: platform-orchestrator
+    component: server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

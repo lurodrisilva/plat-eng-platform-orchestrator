@@ -1,0 +1,19 @@
+environmentRules:
+  - environment: production
+    allowedBranches:
+      - main
+      - "release/*"
+    allowedRepos: []
+
+  - environment: staging
+    allowedBranches:
+      - main
+      - "release/*"
+      - "hotfix/*"
+    allowedRepos: []
+
+  - environment: development
+    allowedBranches: []  # all branches allowed
+    allowedRepos: []     # all repos allowed
+
+freezeWindows: []
