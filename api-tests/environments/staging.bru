@@ -1,0 +1,24 @@
+vars {
+  baseUrl: https://orchestrator.staging.example.com
+  appId: payment-service
+  team: payments
+  environment: staging
+  cluster: aks-staging-eastus2
+  namespace: payments
+  appProject: payments-staging
+  chartRepo: myorg/helm-charts
+  chartName: payment-service
+  imageRepo: myregistry.azurecr.io/payment-service
+  imageTag: v1.2.0
+  imageDigest: sha256:def456789012345678901234567890abcdef1234567890abcdef1234567890abcd
+  gitSha: def456789012345678901234567890abcdef1234
+  gitRef: refs/heads/main
+  githubRunId: 11223344
+  workflowName: deploy-staging
+  actor: ci-bot
+  repoFullName: myorg/payment-service
+}
+
+vars:secret [
+  oidcToken
+]

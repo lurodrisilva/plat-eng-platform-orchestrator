@@ -1,0 +1,47 @@
+meta {
+  name: Missing Required Fields
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-err-missing-fields
+}
+
+body:json {
+  {
+    "application": { "id": "", "team": "" },
+    "image": { "repository": "", "tag": "", "digest": "" },
+    "chart": { "repository": "", "name": "" },
+    "target": { "environment": "", "cluster": "", "namespace": "", "appProject": "" },
+    "source": { "gitSha": "", "gitRef": "", "githubRunId": "", "githubRunAttempt": 0, "workflowName": "", "actor": "" }
+  }
+}
+
+assert {
+  res.status: eq 422
+}
+
+tests {
+  test("returns 422 or 400 for empty required fields", function() {
+    const status = res.getStatus();
+    expect(status).to.be.oneOf([400, 422]);
+  });
+
+  test("error response has proper structure", function() {
+    const body = res.getBody();
+    expect(body).to.have.property("error");
+    expect(body.error).to.have.property("code");
+    expect(body.error).to.have.property("message");
+  });
+}

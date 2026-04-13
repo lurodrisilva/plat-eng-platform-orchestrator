@@ -1,0 +1,36 @@
+meta {
+  name: Liveness Probe
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/healthz
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq ok
+  res.responseTime: lt 500
+}
+
+tests {
+  test("returns 200 OK", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("body contains status ok", function() {
+    const body = res.getBody();
+    expect(body).to.have.property("status");
+    expect(body.status).to.equal("ok");
+  });
+
+  test("responds within 500ms", function() {
+    expect(res.responseTime).to.be.below(500);
+  });
+
+  test("content-type is JSON", function() {
+    expect(res.headers["content-type"]).to.include("application/json");
+  });
+}

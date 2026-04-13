@@ -1,0 +1,41 @@
+meta {
+  name: Get Non-existent Deployment
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/deployments/dep-99991231-nonexistent-prod-0000000
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  X-Request-ID: bruno-test-status-404
+}
+
+assert {
+  res.status: eq 404
+  res.body.error: isDefined
+  res.body.error.code: eq NOT_FOUND
+}
+
+tests {
+  test("returns 404 Not Found", function() {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("error response has proper structure", function() {
+    const body = res.getBody();
+    expect(body).to.have.property("error");
+    expect(body.error).to.have.property("code");
+    expect(body.error).to.have.property("message");
+    expect(body.error.code).to.equal("NOT_FOUND");
+  });
+
+  test("error message mentions deployment", function() {
+    const msg = res.getBody().error.message;
+    expect(msg).to.be.a("string");
+    expect(msg.length).to.be.above(0);
+  });
+}

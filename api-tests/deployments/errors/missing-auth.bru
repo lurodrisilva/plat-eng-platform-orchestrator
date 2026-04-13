@@ -1,0 +1,40 @@
+meta {
+  name: Missing Authorization Header
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-err-no-auth
+}
+
+body:json {
+  {
+    "application": { "id": "test-app", "team": "test" },
+    "image": { "repository": "reg/app", "tag": "v1", "digest": "sha256:abc123" },
+    "chart": { "repository": "org/charts", "name": "app" },
+    "target": { "environment": "dev", "cluster": "c1", "namespace": "ns1", "appProject": "p1" },
+    "source": { "gitSha": "abc123def456789012345678901234567890abcd", "gitRef": "refs/heads/main", "githubRunId": "1", "githubRunAttempt": 1, "workflowName": "deploy", "actor": "user" }
+  }
+}
+
+assert {
+  res.status: eq 401
+  res.body.error.code: eq AUTHENTICATION_FAILED
+}
+
+tests {
+  test("returns 401 Unauthorized", function() {
+    expect(res.getStatus()).to.equal(401);
+  });
+
+  test("error code is AUTHENTICATION_FAILED", function() {
+    expect(res.getBody().error.code).to.equal("AUTHENTICATION_FAILED");
+  });
+}

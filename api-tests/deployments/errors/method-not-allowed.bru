@@ -1,0 +1,24 @@
+meta {
+  name: Method Not Allowed
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: none
+}
+
+headers {
+  X-Request-ID: bruno-test-err-method
+}
+
+assert {
+  res.status: eq 405
+}
+
+tests {
+  test("returns 405 Method Not Allowed", function() {
+    expect(res.getStatus()).to.equal(405);
+  });
+}

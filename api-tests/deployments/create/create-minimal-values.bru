@@ -1,0 +1,65 @@
+meta {
+  name: Create with Minimal Values
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{appId}}-{{environment}}-{{gitSha}}-{{githubRunId}}-minimal
+  X-Request-ID: bruno-test-create-minimal
+}
+
+body:json {
+  {
+    "application": {
+      "id": "{{appId}}",
+      "team": "{{team}}"
+    },
+    "image": {
+      "repository": "{{imageRepo}}",
+      "tag": "{{imageTag}}",
+      "digest": "{{imageDigest}}"
+    },
+    "chart": {
+      "repository": "{{chartRepo}}",
+      "name": "{{chartName}}"
+    },
+    "target": {
+      "environment": "{{environment}}",
+      "cluster": "{{cluster}}",
+      "namespace": "{{namespace}}",
+      "appProject": "{{appProject}}"
+    },
+    "values": null,
+    "source": {
+      "gitSha": "{{gitSha}}",
+      "gitRef": "{{gitRef}}",
+      "githubRunId": "{{githubRunId}}",
+      "githubRunAttempt": 1,
+      "workflowName": "{{workflowName}}",
+      "actor": "{{actor}}"
+    }
+  }
+}
+
+assert {
+  res.status: eq 202
+  res.body.deploymentId: isDefined
+}
+
+tests {
+  test("accepts null values and no correlationId", function() {
+    expect(res.getStatus()).to.equal(202);
+    expect(res.getBody().deploymentId).to.be.a("string");
+  });
+}

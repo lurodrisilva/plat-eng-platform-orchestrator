@@ -1,0 +1,24 @@
+vars {
+  baseUrl: http://localhost:8080
+  appId: payment-service
+  team: payments
+  environment: development
+  cluster: minikube
+  namespace: payments
+  appProject: payments-dev
+  chartRepo: myorg/helm-charts
+  chartName: payment-service
+  imageRepo: myregistry.azurecr.io/payment-service
+  imageTag: v1.0.0
+  imageDigest: sha256:abc123def456789012345678901234567890abcdef1234567890abcdef12345678
+  gitSha: abc123def456789012345678901234567890abcd
+  gitRef: refs/heads/main
+  githubRunId: 98765432
+  workflowName: deploy-dev
+  actor: developer
+  repoFullName: myorg/payment-service
+}
+
+vars:secret [
+  oidcToken
+]
