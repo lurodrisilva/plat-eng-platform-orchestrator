@@ -1,0 +1,63 @@
+meta {
+  name: Invalid Image Digest
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-err-bad-digest
+}
+
+body:json {
+  {
+    "application": { "id": "{{appId}}", "team": "{{team}}" },
+    "image": {
+      "repository": "{{imageRepo}}",
+      "tag": "{{imageTag}}",
+      "digest": "md5:notavaliddigest"
+    },
+    "chart": { "repository": "{{chartRepo}}", "name": "{{chartName}}" },
+    "target": {
+      "environment": "{{environment}}",
+      "cluster": "{{cluster}}",
+      "namespace": "{{namespace}}",
+      "appProject": "{{appProject}}"
+    },
+    "source": {
+      "gitSha": "{{gitSha}}",
+      "gitRef": "{{gitRef}}",
+      "githubRunId": "{{githubRunId}}",
+      "githubRunAttempt": 1,
+      "workflowName": "{{workflowName}}",
+      "actor": "{{actor}}"
+    }
+  }
+}
+
+assert {
+  res.status: eq 422
+}
+
+tests {
+  test("rejects non-sha256 digest", function() {
+    const status = res.getStatus();
+    expect(status).to.be.oneOf([400, 422]);
+  });
+
+  test("error mentions digest", function() {
+    const msg = res.getBody().error.message.toLowerCase();
+    expect(msg).to.satisfy(function(m) {
+      return m.includes("digest") || m.includes("sha256") || m.includes("image");
+    });
+  });
+}

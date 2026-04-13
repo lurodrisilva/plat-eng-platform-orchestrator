@@ -1,0 +1,68 @@
+meta {
+  name: Get Deployment Status
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/deployments/{{deploymentId}}
+  auth: none
+}
+
+headers {
+  Accept: application/json
+  X-Request-ID: bruno-test-status-001
+}
+
+assert {
+  res.status: eq 200
+  res.body.id: isDefined
+  res.body.applicationId: isDefined
+  res.body.status: isDefined
+  res.body.environment: isDefined
+  res.body.startedAt: isDefined
+}
+
+tests {
+  test("returns 200 OK", function() {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns deployment details", function() {
+    const body = res.getBody();
+    expect(body.id).to.be.a("string");
+    expect(body.applicationId).to.be.a("string");
+    expect(body.status).to.be.a("string");
+    expect(body.environment).to.be.a("string");
+  });
+
+  test("status is a valid deployment state", function() {
+    const validStatuses = [
+      "RECEIVED", "VALIDATING", "REJECTED",
+      "METADATA_GENERATED", "CHART_RESOLVED", "CHART_COMPOSED",
+      "ARTIFACT_PUBLISHED", "ARGO_APP_CREATED", "SYNCING",
+      "HEALTHY", "DEGRADED", "FAILED", "ROLLED_BACK", "COMPLETED"
+    ];
+    expect(validStatuses).to.include(res.getBody().status);
+  });
+
+  test("startedAt is a valid timestamp", function() {
+    const date = new Date(res.getBody().startedAt);
+    expect(date.getTime()).to.not.be.NaN;
+  });
+
+  test("completedAt is null or valid timestamp", function() {
+    const body = res.getBody();
+    if (body.completedAt) {
+      const date = new Date(body.completedAt);
+      expect(date.getTime()).to.not.be.NaN;
+    }
+  });
+
+  test("durationMs is zero or positive", function() {
+    const body = res.getBody();
+    if (body.durationMs !== undefined) {
+      expect(body.durationMs).to.be.at.least(0);
+    }
+  });
+}

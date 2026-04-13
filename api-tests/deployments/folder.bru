@@ -1,0 +1,20 @@
+meta {
+  name: Deployments
+}
+
+headers {
+  Content-Type: application/json
+}
+
+auth {
+  mode: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+docs {
+  Deployment lifecycle endpoints.
+  All requests require a valid GitHub Actions OIDC JWT.
+}

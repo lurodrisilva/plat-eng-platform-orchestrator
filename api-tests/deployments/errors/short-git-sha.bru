@@ -1,0 +1,63 @@
+meta {
+  name: Short Git SHA
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-err-short-sha
+}
+
+body:json {
+  {
+    "application": { "id": "{{appId}}", "team": "{{team}}" },
+    "image": {
+      "repository": "{{imageRepo}}",
+      "tag": "{{imageTag}}",
+      "digest": "{{imageDigest}}"
+    },
+    "chart": { "repository": "{{chartRepo}}", "name": "{{chartName}}" },
+    "target": {
+      "environment": "{{environment}}",
+      "cluster": "{{cluster}}",
+      "namespace": "{{namespace}}",
+      "appProject": "{{appProject}}"
+    },
+    "source": {
+      "gitSha": "abc",
+      "gitRef": "{{gitRef}}",
+      "githubRunId": "{{githubRunId}}",
+      "githubRunAttempt": 1,
+      "workflowName": "{{workflowName}}",
+      "actor": "{{actor}}"
+    }
+  }
+}
+
+assert {
+  res.status: eq 422
+}
+
+tests {
+  test("rejects git SHA shorter than 7 chars", function() {
+    const status = res.getStatus();
+    expect(status).to.be.oneOf([400, 422]);
+  });
+
+  test("error mentions SHA", function() {
+    const msg = res.getBody().error.message.toLowerCase();
+    expect(msg).to.satisfy(function(m) {
+      return m.includes("sha") || m.includes("git") || m.includes("characters");
+    });
+  });
+}

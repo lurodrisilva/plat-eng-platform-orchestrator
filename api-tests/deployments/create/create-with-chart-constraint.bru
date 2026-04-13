@@ -1,0 +1,68 @@
+meta {
+  name: Create with Chart Constraint
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{appId}}-{{environment}}-{{gitSha}}-{{githubRunId}}-constraint
+  X-Request-ID: bruno-test-create-constraint
+}
+
+body:json {
+  {
+    "application": {
+      "id": "{{appId}}",
+      "team": "{{team}}"
+    },
+    "image": {
+      "repository": "{{imageRepo}}",
+      "tag": "{{imageTag}}",
+      "digest": "{{imageDigest}}"
+    },
+    "chart": {
+      "repository": "{{chartRepo}}",
+      "name": "{{chartName}}",
+      "versionConstraint": "~1.5.0",
+      "allowPrerelease": false
+    },
+    "target": {
+      "environment": "{{environment}}",
+      "cluster": "{{cluster}}",
+      "namespace": "{{namespace}}",
+      "appProject": "{{appProject}}"
+    },
+    "values": {},
+    "source": {
+      "gitSha": "{{gitSha}}",
+      "gitRef": "{{gitRef}}",
+      "githubRunId": "{{githubRunId}}",
+      "githubRunAttempt": 1,
+      "workflowName": "{{workflowName}}",
+      "actor": "{{actor}}"
+    },
+    "correlationId": "bruno-constraint-{{$timestamp}}"
+  }
+}
+
+assert {
+  res.status: eq 202
+  res.body.deploymentId: isDefined
+  res.body.status: eq RECEIVED
+}
+
+tests {
+  test("accepts tilde version constraint", function() {
+    expect(res.getStatus()).to.equal(202);
+  });
+}

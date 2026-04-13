@@ -1,0 +1,27 @@
+headers {
+  Accept: application/json
+  X-Client: bruno
+}
+
+vars {
+  apiVersion: v1
+}
+
+script:post-response {
+  if (res.status >= 500) {
+    console.error("Server error:", res.status, res.getBody());
+  }
+}
+
+docs {
+  Platform Orchestrator API Tests
+
+  This collection tests the deployment control plane API that sits
+  between GitHub Actions and Argo CD.
+
+  Environments:
+  - local: localhost:8080
+  - staging: staging orchestrator endpoint
+
+  Auth: GitHub Actions OIDC JWT (use vars:secret for tokens)
+}

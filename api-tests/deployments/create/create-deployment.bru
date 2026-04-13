@@ -1,0 +1,107 @@
+meta {
+  name: Create Deployment
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{appId}}-{{environment}}-{{gitSha}}-{{githubRunId}}-1
+  X-Request-ID: bruno-test-create-001
+}
+
+body:json {
+  {
+    "application": {
+      "id": "{{appId}}",
+      "team": "{{team}}"
+    },
+    "image": {
+      "repository": "{{imageRepo}}",
+      "tag": "{{imageTag}}",
+      "digest": "{{imageDigest}}"
+    },
+    "chart": {
+      "repository": "{{chartRepo}}",
+      "name": "{{chartName}}",
+      "versionConstraint": "",
+      "allowPrerelease": false
+    },
+    "target": {
+      "environment": "{{environment}}",
+      "cluster": "{{cluster}}",
+      "namespace": "{{namespace}}",
+      "appProject": "{{appProject}}"
+    },
+    "values": {
+      "replicaCount": 2,
+      "resources": {
+        "limits": { "cpu": "500m", "memory": "512Mi" },
+        "requests": { "cpu": "250m", "memory": "256Mi" }
+      }
+    },
+    "source": {
+      "gitSha": "{{gitSha}}",
+      "gitRef": "{{gitRef}}",
+      "githubRunId": "{{githubRunId}}",
+      "githubRunAttempt": 1,
+      "workflowName": "{{workflowName}}",
+      "actor": "{{actor}}"
+    },
+    "correlationId": "bruno-test-{{$timestamp}}"
+  }
+}
+
+vars:post-response {
+  deploymentId: res.body.deploymentId
+  statusUrl: res.body.statusUrl
+}
+
+assert {
+  res.status: eq 202
+  res.body.deploymentId: isDefined
+  res.body.status: eq RECEIVED
+  res.body.statusUrl: isDefined
+  res.body.createdAt: isDefined
+}
+
+tests {
+  test("returns 202 Accepted", function() {
+    expect(res.getStatus()).to.equal(202);
+  });
+
+  test("returns a deployment ID", function() {
+    const body = res.getBody();
+    expect(body.deploymentId).to.be.a("string");
+    expect(body.deploymentId).to.match(/^dep-/);
+  });
+
+  test("initial status is RECEIVED", function() {
+    expect(res.getBody().status).to.equal("RECEIVED");
+  });
+
+  test("returns a status URL", function() {
+    const body = res.getBody();
+    expect(body.statusUrl).to.be.a("string");
+    expect(body.statusUrl).to.include("/api/v1/deployments/");
+  });
+
+  test("createdAt is a valid timestamp", function() {
+    const body = res.getBody();
+    const date = new Date(body.createdAt);
+    expect(date.getTime()).to.not.be.NaN;
+  });
+
+  test("response time under 2s", function() {
+    expect(res.responseTime).to.be.below(2000);
+  });
+}
