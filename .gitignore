@@ -21,7 +21,9 @@ coverage.html
 Thumbs.db
 
 # OMC state
-.omc/state/
+.omc/
+CLAUDE.md
+AGENTS.md
 
 # Environment / secrets
 .env
