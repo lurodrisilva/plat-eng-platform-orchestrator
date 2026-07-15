@@ -68,7 +68,7 @@ func NewImage(repository, tag, digest string) (Image, error) {
 		return Image{}, errors.New("image digest is required")
 	}
 	if !strings.HasPrefix(digest, "sha256:") {
-		return Image{}, errors.New("image digest must start with sha256:")
+		return Image{}, errors.New("image digest must start with a sha256: prefix")
 	}
 	return Image{repository: repository, tag: tag, digest: digest}, nil
 }

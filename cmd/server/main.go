@@ -52,7 +52,7 @@ func run() error {
 		defer func() {
 			shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
 			defer c()
-			tp.Shutdown(shutdownCtx)
+			_ = tp.Shutdown(shutdownCtx)
 		}()
 	}
 
@@ -61,7 +61,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("connect documentdb: %w", err)
 	}
-	defer mongoClient.Disconnect(ctx)
+	defer func() { _ = mongoClient.Disconnect(ctx) }()
 
 	deploymentsColl := mongoClient.Database(cfg.DocDB.Database).Collection(cfg.DocDB.DeploymentsCollection)
 	deploymentRepo := persistence.NewDeploymentRepository(deploymentsColl, logger)

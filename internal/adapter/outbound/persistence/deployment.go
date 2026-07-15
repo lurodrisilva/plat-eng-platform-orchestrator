@@ -96,7 +96,7 @@ func (r *DeploymentRepository) FindByApplication(ctx context.Context, appID, env
 	if err != nil {
 		return nil, fmt.Errorf("find deployments: %w", err)
 	}
-	defer cursor.Close(ctx)
+	defer func() { _ = cursor.Close(ctx) }()
 
 	var result []*deployment.Deployment
 	for cursor.Next(ctx) {
