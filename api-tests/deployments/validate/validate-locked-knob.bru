@@ -1,0 +1,60 @@
+meta {
+  name: Validate Locked Knob
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments:validate
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-validate-locked
+}
+
+# Dry-run of a values overlay that mixes an allowlisted knob (replicaCount)
+# with a platform-locked one (securityContext.runAsNonRoot, guardrail G4).
+# Always 200; `blocked` reflects enforce mode; `violations` names the locked key.
+body:json {
+  {
+    "values": {
+      "replicaCount": 3,
+      "securityContext": { "runAsNonRoot": false }
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("validate returns 200 with a verdict", function() {
+    expect(res.getStatus()).to.equal(200);
+    const body = res.getBody();
+    expect(body).to.have.property("mode");
+    expect(body).to.have.property("violations");
+    expect(body).to.have.property("blocked");
+  });
+
+  test("the locked knob is reported as a violation", function() {
+    const body = res.getBody();
+    expect(body.violations).to.include("securityContext.runAsNonRoot");
+  });
+
+  test("allowlisted replicaCount is NOT a violation", function() {
+    const body = res.getBody();
+    expect(body.violations).to.not.include("replicaCount");
+  });
+
+  test("blocked iff enforce mode", function() {
+    const body = res.getBody();
+    if (body.mode === "enforce") {
+      expect(body.blocked).to.equal(true);
+    } else {
+      expect(body.blocked).to.equal(false);
+    }
+  });
+}
