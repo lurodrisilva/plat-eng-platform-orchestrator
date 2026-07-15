@@ -23,6 +23,12 @@ type AllowlistDecision struct {
 // allowlist is a platform-locked knob. Governance stays server-side
 // (ADR-0006); this is the API-boundary complement to Kyverno admission
 // (ADR-0011).
+//
+// The allowlist is keyed per target environment: the same knob can be tunable
+// in one environment and platform-locked in another (e.g. autoscaling is a
+// developer knob in development but platform-managed in production). An
+// environment with no explicit rule falls back to the default key set. An
+// empty environment string resolves to the default set.
 type TunableAllowlist interface {
-	Validate(ctx context.Context, values map[string]any) AllowlistDecision
+	Validate(ctx context.Context, values map[string]any, environment string) AllowlistDecision
 }

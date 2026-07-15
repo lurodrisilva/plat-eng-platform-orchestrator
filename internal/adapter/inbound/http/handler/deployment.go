@@ -152,23 +152,30 @@ func (h *Deployment) Status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto)
 }
 
-// validateRequest is the body of POST /api/v1/deployments:validate.
+// validateRequest is the body of POST /api/v1/deployments:validate. The
+// tunable allowlist is per-environment, so the verdict depends on which
+// environment the overlay targets; an empty environment resolves to the
+// default key set.
 type validateRequest struct {
-	Values map[string]any `json:"values"`
+	Environment string         `json:"environment"`
+	Values      map[string]any `json:"values"`
 }
 
-// validateResponse is the advisory J3 verdict for a values overlay.
+// validateResponse is the advisory J3 verdict for a values overlay. It echoes
+// the environment the verdict was computed for so the caller can confirm which
+// per-environment rule applied.
 type validateResponse struct {
-	Mode       string   `json:"mode"`
-	Violations []string `json:"violations"`
-	Blocked    bool     `json:"blocked"`
+	Environment string   `json:"environment"`
+	Mode        string   `json:"mode"`
+	Violations  []string `json:"violations"`
+	Blocked     bool     `json:"blocked"`
 }
 
 // ValidateTunables handles POST /api/v1/deployments:validate — a non-mutating
-// dry-run of the J3 tunable-allowlist check over a values overlay, for the
-// portal create wizard. Always returns 200 with the verdict; blocked = the
-// overlay would be rejected at create (enforce mode). Dev-open: no OIDC, no
-// secrets, values only.
+// dry-run of the J3 tunable-allowlist check over a values overlay for a target
+// environment, for the portal create wizard. Always returns 200 with the
+// verdict; blocked = the overlay would be rejected at create (enforce mode).
+// Dev-open: no OIDC, no secrets, values only.
 func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
 	var req validateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -176,9 +183,9 @@ func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := validateResponse{Mode: "disabled", Violations: []string{}}
+	resp := validateResponse{Environment: req.Environment, Mode: "disabled", Violations: []string{}}
 	if h.allowlist != nil {
-		dec := h.allowlist.Validate(r.Context(), req.Values)
+		dec := h.allowlist.Validate(r.Context(), req.Values, req.Environment)
 		resp.Mode = dec.Mode
 		resp.Blocked = dec.Reject
 		if dec.Violations != nil {

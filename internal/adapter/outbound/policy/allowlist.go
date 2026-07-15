@@ -22,21 +22,32 @@ const (
 	ModeEnforce = "enforce" // reject locked-knob overrides at the boundary
 )
 
+// keySet is one allowlist entry in the config — the default set or a single
+// environment's set.
+type keySet struct {
+	AllowedKeys []string `yaml:"allowedKeys"`
+}
+
 // allowlistFile is the on-disk schema — a section of the policies YAML
-// (config.policies.configPath, e.g. policies/default.yaml).
+// (config.policies.configPath, e.g. policies/default.yaml). The allowlist is
+// keyed per environment: `default` holds the fallback set and `environments`
+// maps an environment name to its own set (full replacement, not a merge).
 type allowlistFile struct {
 	TunableAllowlist struct {
-		Mode        string   `yaml:"mode"`
-		AllowedKeys []string `yaml:"allowedKeys"`
+		Mode         string            `yaml:"mode"`
+		Default      keySet            `yaml:"default"`
+		Environments map[string]keySet `yaml:"environments"`
 	} `yaml:"tunableAllowlist"`
 }
 
-// TunableAllowlist enforces the J3 tunable allowlist over a values overlay.
-// It is chart-agnostic (slice-1): one global set of overridable value-key
-// paths; everything else is platform-locked.
+// TunableAllowlist enforces the J3 tunable allowlist over a values overlay,
+// per target environment. It is chart-agnostic (slice-1): one set of
+// overridable value-key paths per environment; everything else is
+// platform-locked. An environment with no explicit set uses the default set.
 type TunableAllowlist struct {
-	mode    string
-	allowed []string // dotted allowlist key paths
+	mode        string
+	defaultKeys []string            // dotted allowlist key paths (fallback)
+	envKeys     map[string][]string // environment name -> its own dotted key paths
 }
 
 // LoadTunableAllowlist reads the tunable-allowlist config from a policies YAML
@@ -51,13 +62,18 @@ func LoadTunableAllowlist(path string) (*TunableAllowlist, error) {
 	if err := yaml.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse allowlist config: %w", err)
 	}
-	return NewTunableAllowlist(f.TunableAllowlist.Mode, f.TunableAllowlist.AllowedKeys)
+	envKeys := make(map[string][]string, len(f.TunableAllowlist.Environments))
+	for env, ks := range f.TunableAllowlist.Environments {
+		envKeys[env] = ks.AllowedKeys
+	}
+	return NewTunableAllowlist(f.TunableAllowlist.Mode, f.TunableAllowlist.Default.AllowedKeys, envKeys)
 }
 
-// NewTunableAllowlist constructs a validator from an explicit mode + allowlist.
-// An empty mode defaults to audit (audit-first, per the guardrails rollout
-// doctrine). An unrecognised mode is an error.
-func NewTunableAllowlist(mode string, allowedKeys []string) (*TunableAllowlist, error) {
+// NewTunableAllowlist constructs a validator from an explicit mode, default key
+// set, and optional per-environment key sets. An empty mode defaults to audit
+// (audit-first, per the guardrails rollout doctrine). An unrecognised mode is
+// an error. A nil envKeys map means every environment uses the default set.
+func NewTunableAllowlist(mode string, defaultKeys []string, envKeys map[string][]string) (*TunableAllowlist, error) {
 	m := strings.ToLower(strings.TrimSpace(mode))
 	if m == "" {
 		m = ModeAudit
@@ -65,25 +81,44 @@ func NewTunableAllowlist(mode string, allowedKeys []string) (*TunableAllowlist, 
 	if m != ModeAudit && m != ModeEnforce {
 		return nil, fmt.Errorf("invalid tunableAllowlist.mode %q (want %q|%q)", mode, ModeAudit, ModeEnforce)
 	}
-	allowed := make([]string, 0, len(allowedKeys))
-	for _, k := range allowedKeys {
+	envs := make(map[string][]string, len(envKeys))
+	for env, keys := range envKeys {
+		envs[strings.TrimSpace(env)] = cleanKeys(keys)
+	}
+	return &TunableAllowlist{mode: m, defaultKeys: cleanKeys(defaultKeys), envKeys: envs}, nil
+}
+
+// cleanKeys trims and drops empty entries.
+func cleanKeys(keys []string) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
 		if k = strings.TrimSpace(k); k != "" {
-			allowed = append(allowed, k)
+			out = append(out, k)
 		}
 	}
-	return &TunableAllowlist{mode: m, allowed: allowed}, nil
+	return out
 }
 
 // Mode returns the active enforcement mode.
 func (a *TunableAllowlist) Mode() string { return a.mode }
 
+// keysFor resolves the allowlist key set for an environment: its own set if one
+// is configured, otherwise the default set.
+func (a *TunableAllowlist) keysFor(environment string) []string {
+	if keys, ok := a.envKeys[environment]; ok {
+		return keys
+	}
+	return a.defaultKeys
+}
+
 // Validate flattens the values overlay to leaf key paths and reports any that
-// are not covered by the allowlist (platform-locked knobs). Reject is set only
-// in enforce mode.
-func (a *TunableAllowlist) Validate(_ context.Context, values map[string]any) port.AllowlistDecision {
+// are not covered by the allowlist for the target environment (platform-locked
+// knobs). Reject is set only in enforce mode.
+func (a *TunableAllowlist) Validate(_ context.Context, values map[string]any, environment string) port.AllowlistDecision {
+	allowed := a.keysFor(environment)
 	var violations []string
 	for _, leaf := range flattenKeys(values) {
-		if !a.covered(leaf) {
+		if !covered(allowed, leaf) {
 			violations = append(violations, leaf)
 		}
 	}
@@ -97,8 +132,8 @@ func (a *TunableAllowlist) Validate(_ context.Context, values map[string]any) po
 
 // covered reports whether a leaf path is permitted: it equals an allowlist
 // entry exactly, or is nested beneath one (the entry is a parent segment).
-func (a *TunableAllowlist) covered(leaf string) bool {
-	for _, entry := range a.allowed {
+func covered(allowed []string, leaf string) bool {
+	for _, entry := range allowed {
 		if leaf == entry || strings.HasPrefix(leaf, entry+".") {
 			return true
 		}

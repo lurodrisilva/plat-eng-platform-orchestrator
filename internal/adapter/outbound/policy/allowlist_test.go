@@ -21,7 +21,7 @@ var seedKeys = []string{
 
 func mustAllowlist(t *testing.T, mode string, keys []string) *TunableAllowlist {
 	t.Helper()
-	a, err := NewTunableAllowlist(mode, keys)
+	a, err := NewTunableAllowlist(mode, keys, nil)
 	if err != nil {
 		t.Fatalf("NewTunableAllowlist(%q): %v", mode, err)
 	}
@@ -123,7 +123,8 @@ func TestTunableAllowlist_Validate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := mustAllowlist(t, tt.mode, seedKeys)
-			got := a.Validate(context.Background(), tt.values)
+			// Empty environment resolves to the default (seed) key set.
+			got := a.Validate(context.Background(), tt.values, "")
 			if got.Reject != tt.wantReject {
 				t.Errorf("Reject = %v, want %v", got.Reject, tt.wantReject)
 			}
@@ -150,7 +151,7 @@ func TestNewTunableAllowlist_Mode(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a, err := NewTunableAllowlist(tt.mode, seedKeys)
+			a, err := NewTunableAllowlist(tt.mode, seedKeys, nil)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -170,7 +171,11 @@ func TestNewTunableAllowlist_Mode(t *testing.T) {
 func TestLoadTunableAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "policy.yaml")
-	yaml := "tunableAllowlist:\n  mode: enforce\n  allowedKeys:\n    - replicaCount\n"
+	yaml := "tunableAllowlist:\n" +
+		"  mode: enforce\n" +
+		"  default:\n    allowedKeys:\n      - replicaCount\n" +
+		"  environments:\n" +
+		"    production:\n      allowedKeys:\n        - resources.requests.cpu\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -183,14 +188,78 @@ func TestLoadTunableAllowlist(t *testing.T) {
 		t.Errorf("Mode() = %q, want enforce", a.Mode())
 	}
 
-	dec := a.Validate(context.Background(), map[string]any{"replicaCount": 3})
+	// Default set: replicaCount allowed, image.tag locked.
+	dec := a.Validate(context.Background(), map[string]any{"replicaCount": 3}, "")
 	if dec.Reject || len(dec.Violations) != 0 {
 		t.Errorf("allowed knob should pass, got %+v", dec)
 	}
-	dec = a.Validate(context.Background(), map[string]any{"image": map[string]any{"tag": "latest"}})
+	dec = a.Validate(context.Background(), map[string]any{"image": map[string]any{"tag": "latest"}}, "")
 	if !dec.Reject {
 		t.Error("locked image.tag override should reject in enforce mode")
 	}
+
+	// production replaces the default set: replicaCount is NOT in the prod set,
+	// so it becomes locked; resources.requests.cpu is allowed.
+	dec = a.Validate(context.Background(), map[string]any{"replicaCount": 3}, "production")
+	if !dec.Reject || len(dec.Violations) != 1 || dec.Violations[0] != "replicaCount" {
+		t.Errorf("replicaCount should be locked in production (full replacement), got %+v", dec)
+	}
+	dec = a.Validate(context.Background(), map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": "500m"}}}, "production")
+	if dec.Reject || len(dec.Violations) != 0 {
+		t.Errorf("resources.requests.cpu should pass in production, got %+v", dec)
+	}
+}
+
+// TestTunableAllowlist_PerEnvironment is the core per-env DoD: autoscaling is a
+// developer knob but platform-locked in production; resources.requests is
+// tunable in both; securityContext is locked everywhere; an unconfigured
+// environment falls back to the default set.
+func TestTunableAllowlist_PerEnvironment(t *testing.T) {
+	prodKeys := []string{"resources.requests.cpu", "resources.requests.memory"}
+	devKeys := []string{
+		"resources.requests.cpu", "resources.requests.memory",
+		"autoscaling.minReplicas", "autoscaling.maxReplicas",
+	}
+	a := mustPerEnvAllowlist(t, ModeEnforce, seedKeys, map[string][]string{
+		"production":  prodKeys,
+		"development": devKeys,
+	})
+
+	autoscale := map[string]any{"autoscaling": map[string]any{"maxReplicas": 20}}
+	requests := map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": "500m"}}}
+	secctx := map[string]any{"securityContext": map[string]any{"runAsNonRoot": false}}
+
+	cases := []struct {
+		name       string
+		values     map[string]any
+		env        string
+		wantReject bool
+	}{
+		{"autoscaling locked in production", autoscale, "production", true},
+		{"autoscaling tunable in development", autoscale, "development", false},
+		{"requests tunable in production", requests, "production", false},
+		{"requests tunable in development", requests, "development", false},
+		{"securityContext locked in production", secctx, "production", true},
+		{"securityContext locked in development", secctx, "development", true},
+		{"unconfigured env falls back to default (autoscaling allowed)", autoscale, "staging", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := a.Validate(context.Background(), tc.values, tc.env)
+			if got.Reject != tc.wantReject {
+				t.Errorf("Reject = %v, want %v (violations=%v)", got.Reject, tc.wantReject, got.Violations)
+			}
+		})
+	}
+}
+
+func mustPerEnvAllowlist(t *testing.T, mode string, defaultKeys []string, envKeys map[string][]string) *TunableAllowlist {
+	t.Helper()
+	a, err := NewTunableAllowlist(mode, defaultKeys, envKeys)
+	if err != nil {
+		t.Fatalf("NewTunableAllowlist: %v", err)
+	}
+	return a
 }
 
 func TestLoadTunableAllowlist_MissingFile(t *testing.T) {
