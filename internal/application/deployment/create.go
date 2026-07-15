@@ -75,13 +75,14 @@ func (h *CreateDeploymentHandler) Handle(ctx context.Context, cmd CreateDeployme
 	// J3 tunable allowlist: reject overrides of platform-locked knobs at the
 	// API boundary (enforce mode); in audit mode, observe but don't block.
 	if h.allowlist != nil {
-		dec := h.allowlist.Validate(ctx, cmd.Values)
+		dec := h.allowlist.Validate(ctx, cmd.Values, cmd.Environment)
 		if dec.Reject {
 			return CreateDeploymentResult{}, &LockedKnobError{Keys: dec.Violations}
 		}
 		if len(dec.Violations) > 0 {
 			h.logger.WarnContext(ctx, "tunable allowlist would-deny (audit)",
 				slog.String("mode", dec.Mode),
+				slog.String("environment", cmd.Environment),
 				slog.Any("lockedKeys", dec.Violations),
 			)
 		}

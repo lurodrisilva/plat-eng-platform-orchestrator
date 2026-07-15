@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +18,7 @@ func newValidateHandler(t *testing.T, mode string) *Deployment {
 		"replicaCount",
 		"resources.requests.cpu",
 		"resources.requests.memory",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewTunableAllowlist: %v", err)
 	}
@@ -81,6 +82,39 @@ func TestValidateTunables_LockedKnob_Audit(t *testing.T) {
 	}
 	if resp.Mode != policy.ModeAudit {
 		t.Errorf("mode = %q, want audit", resp.Mode)
+	}
+}
+
+func TestValidateTunables_PerEnvironment(t *testing.T) {
+	// autoscaling is tunable in development but platform-locked in production;
+	// the same overlay flips verdict on the environment field alone.
+	al, err := policy.NewTunableAllowlist(policy.ModeEnforce,
+		[]string{"resources.requests.cpu"},
+		map[string][]string{
+			"production":  {"resources.requests.cpu"},
+			"development": {"resources.requests.cpu", "autoscaling.maxReplicas"},
+		})
+	if err != nil {
+		t.Fatalf("NewTunableAllowlist: %v", err)
+	}
+	h := NewDeployment(deploymentapp.Application{}, nil, al, nil)
+
+	body := `{"environment":%q,"values":{"autoscaling":{"maxReplicas":20}}}`
+
+	_, prod := postValidate(t, h, fmt.Sprintf(body, "production"))
+	if !prod.Blocked {
+		t.Error("autoscaling.maxReplicas must be blocked in production")
+	}
+	if prod.Environment != "production" {
+		t.Errorf("environment echoed = %q, want production", prod.Environment)
+	}
+
+	_, dev := postValidate(t, h, fmt.Sprintf(body, "development"))
+	if dev.Blocked {
+		t.Error("autoscaling.maxReplicas must be tunable in development")
+	}
+	if len(dev.Violations) != 0 {
+		t.Errorf("development violations = %v, want none", dev.Violations)
 	}
 }
 

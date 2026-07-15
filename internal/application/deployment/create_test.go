@@ -26,7 +26,7 @@ func (f *fakeRepo) FindByApplication(ctx context.Context, appID, environment str
 // fakeAllowlist returns a canned decision.
 type fakeAllowlist struct{ dec port.AllowlistDecision }
 
-func (f fakeAllowlist) Validate(ctx context.Context, values map[string]any) port.AllowlistDecision {
+func (f fakeAllowlist) Validate(ctx context.Context, values map[string]any, environment string) port.AllowlistDecision {
 	return f.dec
 }
 

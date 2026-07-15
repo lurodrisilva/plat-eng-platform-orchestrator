@@ -1,0 +1,48 @@
+meta {
+  name: Validate Per-Env Development
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments:validate
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-validate-dev
+}
+
+# Same overlay as validate-per-env-production, but targeting development, where
+# autoscaling IS a developer knob — so autoscaling.maxReplicas is NOT a
+# violation. This is the per-environment DoD: the environment field alone flips
+# the verdict for an identical overlay.
+body:json {
+  {
+    "environment": "development",
+    "values": {
+      "resources": { "requests": { "cpu": "500m" } },
+      "autoscaling": { "maxReplicas": 20 }
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("verdict echoes the target environment", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().environment).to.equal("development");
+  });
+
+  test("autoscaling is tunable in development (no violation)", function() {
+    expect(res.getBody().violations).to.not.include("autoscaling.maxReplicas");
+  });
+
+  test("development overlay is not blocked", function() {
+    expect(res.getBody().blocked).to.equal(false);
+  });
+}

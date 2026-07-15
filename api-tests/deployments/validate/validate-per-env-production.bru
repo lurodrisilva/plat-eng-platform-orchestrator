@@ -1,0 +1,58 @@
+meta {
+  name: Validate Per-Env Production
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments:validate
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-validate-prod
+}
+
+# Per-environment allowlist (J3): autoscaling is platform-managed in production,
+# so tuning autoscaling.maxReplicas is a locked-knob violation there. The same
+# overlay is tunable in development (see validate-per-env-development). Verdict
+# is env-sensitive regardless of audit/enforce mode: `violations` names the
+# locked key; `blocked` only flips in enforce mode.
+body:json {
+  {
+    "environment": "production",
+    "values": {
+      "resources": { "requests": { "cpu": "500m" } },
+      "autoscaling": { "maxReplicas": 20 }
+    }
+  }
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("verdict echoes the target environment", function() {
+    expect(res.getStatus()).to.equal(200);
+    expect(res.getBody().environment).to.equal("production");
+  });
+
+  test("autoscaling is locked in production", function() {
+    expect(res.getBody().violations).to.include("autoscaling.maxReplicas");
+  });
+
+  test("resources.requests stays tunable in production", function() {
+    expect(res.getBody().violations).to.not.include("resources.requests.cpu");
+  });
+
+  test("blocked iff enforce mode", function() {
+    const body = res.getBody();
+    if (body.mode === "enforce") {
+      expect(body.blocked).to.equal(true);
+    } else {
+      expect(body.blocked).to.equal(false);
+    }
+  });
+}
