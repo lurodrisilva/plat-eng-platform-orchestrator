@@ -89,7 +89,7 @@ func (r *ChartResolver) listTags(ctx context.Context, owner, repo string) ([]tag
 		if err != nil {
 			return nil, fmt.Errorf("fetch tags: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("github tags returned %d", resp.StatusCode)
@@ -123,7 +123,7 @@ func (r *ChartResolver) downloadArchive(ctx context.Context, owner, repo, ref st
 	if err != nil {
 		return nil, fmt.Errorf("download archive: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("archive download returned %d", resp.StatusCode)
