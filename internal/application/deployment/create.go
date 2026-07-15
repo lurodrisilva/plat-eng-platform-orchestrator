@@ -3,6 +3,7 @@ package deploymentapp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/myorg/platform-orchestrator/internal/application/port"
 	"github.com/myorg/platform-orchestrator/internal/domain/deployment"
@@ -42,24 +43,48 @@ type CreateDeploymentResult struct {
 
 // CreateDeploymentHandler handles the CreateDeploymentCommand use case.
 type CreateDeploymentHandler struct {
-	repo   deployment.Repository
-	policy port.PolicyEvaluator
+	repo      deployment.Repository
+	policy    port.PolicyEvaluator
+	allowlist port.TunableAllowlist
+	logger    *slog.Logger
 }
 
-// NewCreateDeploymentHandler creates a handler with its dependencies.
-func NewCreateDeploymentHandler(repo deployment.Repository, policy port.PolicyEvaluator) *CreateDeploymentHandler {
-	return &CreateDeploymentHandler{repo: repo, policy: policy}
+// NewCreateDeploymentHandler creates a handler with its dependencies. policy
+// and allowlist are optional (nil = that gate is skipped); logger is optional
+// (nil falls back to the slog default).
+func NewCreateDeploymentHandler(repo deployment.Repository, policy port.PolicyEvaluator, allowlist port.TunableAllowlist, logger *slog.Logger) *CreateDeploymentHandler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &CreateDeploymentHandler{repo: repo, policy: policy, allowlist: allowlist, logger: logger}
 }
 
 // Handle validates and creates a new deployment aggregate.
 func (h *CreateDeploymentHandler) Handle(ctx context.Context, cmd CreateDeploymentCommand) (CreateDeploymentResult, error) {
-	// Validate policy
-	decision, err := h.policy.Evaluate(ctx, cmd.RepositoryFull, cmd.GitRef, cmd.Environment)
-	if err != nil {
-		return CreateDeploymentResult{}, fmt.Errorf("create deployment: evaluate policy: %w", err)
+	// Branch/environment policy (optional; nil evaluator = no gate).
+	if h.policy != nil {
+		decision, err := h.policy.Evaluate(ctx, cmd.RepositoryFull, cmd.GitRef, cmd.Environment)
+		if err != nil {
+			return CreateDeploymentResult{}, fmt.Errorf("create deployment: evaluate policy: %w", err)
+		}
+		if !decision.Allowed {
+			return CreateDeploymentResult{}, fmt.Errorf("create deployment: %w: %s", deployment.ErrPolicyViolation, decision.Reason)
+		}
 	}
-	if !decision.Allowed {
-		return CreateDeploymentResult{}, fmt.Errorf("create deployment: %w: %s", deployment.ErrPolicyViolation, decision.Reason)
+
+	// J3 tunable allowlist: reject overrides of platform-locked knobs at the
+	// API boundary (enforce mode); in audit mode, observe but don't block.
+	if h.allowlist != nil {
+		dec := h.allowlist.Validate(ctx, cmd.Values)
+		if dec.Reject {
+			return CreateDeploymentResult{}, &LockedKnobError{Keys: dec.Violations}
+		}
+		if len(dec.Violations) > 0 {
+			h.logger.WarnContext(ctx, "tunable allowlist would-deny (audit)",
+				slog.String("mode", dec.Mode),
+				slog.Any("lockedKeys", dec.Violations),
+			)
+		}
 	}
 
 	// Build domain value objects

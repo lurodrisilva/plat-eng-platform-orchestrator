@@ -6,6 +6,7 @@ import "errors"
 var (
 	ErrNotFound         = errors.New("deployment not found")
 	ErrPolicyViolation  = errors.New("policy violation")
+	ErrTunableLocked    = errors.New("tunable allowlist violation")
 	ErrChartNotFound    = errors.New("chart not found")
 	ErrChartValidation  = errors.New("chart validation failed")
 	ErrChartDependency  = errors.New("chart dependency error")
@@ -17,6 +18,7 @@ var (
 func NonRetryableTypes() []string {
 	return []string{
 		"PolicyViolationError",
+		"TunableLockedError",
 		"AuthenticationError",
 		"ChartValidationError",
 		"ChartNotFoundError",

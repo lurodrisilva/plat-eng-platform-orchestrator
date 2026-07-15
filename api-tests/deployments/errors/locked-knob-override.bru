@@ -1,0 +1,59 @@
+meta {
+  name: Locked Knob Override
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/api/v1/deployments
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{oidcToken}}
+}
+
+headers {
+  Content-Type: application/json
+  X-Request-ID: bruno-test-err-locked-knob
+}
+
+# A fully valid create whose ONLY defect is overriding a platform-locked knob
+# (securityContext.runAsNonRoot — not on the J3 tunable allowlist). replicaCount
+# IS allowlisted, so it must NOT be the reason for rejection.
+# Requires the server running with tunableAllowlist.mode: enforce
+# (default is audit, which returns 202 and only logs the would-deny).
+body:json {
+  {
+    "application": { "id": "payment-service", "team": "payments" },
+    "image": { "repository": "registry.example.com/app", "tag": "v1.0.0", "digest": "sha256:abc123def456" },
+    "chart": { "repository": "myorg/charts", "name": "myapp" },
+    "target": { "environment": "production", "cluster": "aks-prod", "namespace": "default", "appProject": "myproject" },
+    "values": {
+      "replicaCount": 3,
+      "securityContext": { "runAsNonRoot": false }
+    },
+    "source": { "gitSha": "abc123def456789012345678901234567890abcd", "gitRef": "refs/heads/main", "githubRunId": "12345", "githubRunAttempt": 1, "workflowName": "deploy", "actor": "johndoe" }
+  }
+}
+
+assert {
+  res.status: eq 422
+}
+
+tests {
+  test("locked-knob override is rejected with 422", function() {
+    expect(res.getStatus()).to.equal(422);
+  });
+
+  test("error code is LOCKED_KNOB_OVERRIDE", function() {
+    const body = res.getBody();
+    expect(body).to.have.property("error");
+    expect(body.error.code).to.equal("LOCKED_KNOB_OVERRIDE");
+  });
+
+  test("message names the offending locked knob", function() {
+    const body = res.getBody();
+    expect(body.error.message).to.contain("securityContext.runAsNonRoot");
+  });
+}

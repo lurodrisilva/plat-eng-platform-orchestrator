@@ -17,3 +17,25 @@ environmentRules:
     allowedRepos: []     # all repos allowed
 
 freezeWindows: []
+
+# J3 tunable allowlist (on-road custom-tuning). Deny-by-default: only the
+# value-key paths listed here may be overridden in the create `values` overlay;
+# everything else is a platform-locked knob (it carries a guardrail). A locked
+# override is rejected at the API boundary (422 LOCKED_KNOB_OVERRIDE) in
+# enforce mode, or logged-and-allowed in audit mode.
+#   mode: audit   -> observe would-denies, never block (audit-first default)
+#   mode: enforce -> reject locked-knob overrides
+# Seed = sizing + scaling knobs (map ConfigureApp's sizing UI). Locked by
+# omission: securityContext/podSecurityContext (G4), image (G1/G2),
+# ownership+cost labels (G6), serviceAccount/workload-identity (G7).
+tunableAllowlist:
+  mode: audit
+  allowedKeys:
+    - replicaCount
+    - resources.requests.cpu
+    - resources.requests.memory
+    - resources.limits.cpu
+    - resources.limits.memory
+    - autoscaling.minReplicas
+    - autoscaling.maxReplicas
+    - autoscaling.targetCPUUtilizationPercentage

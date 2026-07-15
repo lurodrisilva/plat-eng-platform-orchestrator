@@ -16,7 +16,9 @@ import (
 	httpadapter "github.com/myorg/platform-orchestrator/internal/adapter/inbound/http"
 	"github.com/myorg/platform-orchestrator/internal/adapter/inbound/http/handler"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/persistence"
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
+	"github.com/myorg/platform-orchestrator/internal/application/port"
 	"github.com/myorg/platform-orchestrator/internal/infrastructure/config"
 	"github.com/myorg/platform-orchestrator/internal/infrastructure/telemetry"
 )
@@ -64,11 +66,26 @@ func run() error {
 	deploymentsColl := mongoClient.Database(cfg.DocDB.Database).Collection(cfg.DocDB.DeploymentsCollection)
 	deploymentRepo := persistence.NewDeploymentRepository(deploymentsColl, logger)
 
-	// Application use cases
-	// Policy evaluator would be injected here; using nil-safe stub for now
+	// J3 tunable allowlist (governance, server-side — ADR-0006). Loaded from the
+	// policies config; reject overrides of platform-locked knobs at the API
+	// boundary in enforce mode, observe-only in audit mode.
+	var allowlist port.TunableAllowlist
+	if cfg.Policies.ConfigPath != "" {
+		al, err := policy.LoadTunableAllowlist(cfg.Policies.ConfigPath)
+		if err != nil {
+			return fmt.Errorf("load tunable allowlist: %w", err)
+		}
+		allowlist = al
+		logger.Info("tunable allowlist loaded",
+			slog.String("mode", al.Mode()),
+			slog.String("path", cfg.Policies.ConfigPath))
+	}
+
+	// Application use cases.
+	// Branch/env PolicyEvaluator adapter is still a gap (nil = no gate).
 	app := deploymentapp.Application{
 		Commands: deploymentapp.Commands{
-			CreateDeployment: deploymentapp.NewCreateDeploymentHandler(deploymentRepo, nil),
+			CreateDeployment: deploymentapp.NewCreateDeploymentHandler(deploymentRepo, nil, allowlist, logger),
 		},
 		Queries: deploymentapp.Queries{
 			GetDeployment: deploymentapp.NewGetDeploymentHandler(deploymentRepo),

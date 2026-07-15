@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -111,6 +112,13 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 	result, err := h.app.Commands.CreateDeployment.Handle(ctx, cmd)
 	if err != nil {
 		logger.ErrorContext(ctx, "create deployment failed", slog.String("error", err.Error()))
+		// A locked-knob override (J3 tunable allowlist) is a distinct 422 so the
+		// caller can surface which knobs are platform-locked.
+		var locked *deploymentapp.LockedKnobError
+		if errors.As(err, &locked) {
+			writeError(w, http.StatusUnprocessableEntity, "LOCKED_KNOB_OVERRIDE", err.Error())
+			return
+		}
 		writeError(w, http.StatusUnprocessableEntity, "DEPLOYMENT_FAILED", err.Error())
 		return
 	}
