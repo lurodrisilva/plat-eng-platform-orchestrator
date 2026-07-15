@@ -1,0 +1,104 @@
+package handler
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
+	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
+)
+
+func newValidateHandler(t *testing.T, mode string) *Deployment {
+	t.Helper()
+	al, err := policy.NewTunableAllowlist(mode, []string{
+		"replicaCount",
+		"resources.requests.cpu",
+		"resources.requests.memory",
+	})
+	if err != nil {
+		t.Fatalf("NewTunableAllowlist: %v", err)
+	}
+	// app + validator are unused by the validate endpoint.
+	return NewDeployment(deploymentapp.Application{}, nil, al, nil)
+}
+
+func postValidate(t *testing.T, h *Deployment, body string) (*httptest.ResponseRecorder, validateResponse) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments:validate", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	h.ValidateTunables(rr, req)
+	var resp validateResponse
+	if rr.Code == http.StatusOK {
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode response: %v (body=%s)", err, rr.Body.String())
+		}
+	}
+	return rr, resp
+}
+
+func TestValidateTunables_AllowedKnobs(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeEnforce)
+	rr, resp := postValidate(t, h, `{"values":{"replicaCount":3,"resources":{"requests":{"cpu":"500m","memory":"1Gi"}}}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if resp.Blocked {
+		t.Error("allowed knobs must not be blocked")
+	}
+	if len(resp.Violations) != 0 {
+		t.Errorf("violations = %v, want none", resp.Violations)
+	}
+}
+
+func TestValidateTunables_LockedKnob_Enforce(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeEnforce)
+	rr, resp := postValidate(t, h, `{"values":{"securityContext":{"runAsNonRoot":false}}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if !resp.Blocked {
+		t.Error("locked knob in enforce mode must be blocked")
+	}
+	if len(resp.Violations) != 1 || resp.Violations[0] != "securityContext.runAsNonRoot" {
+		t.Errorf("violations = %v, want [securityContext.runAsNonRoot]", resp.Violations)
+	}
+	if resp.Mode != policy.ModeEnforce {
+		t.Errorf("mode = %q, want enforce", resp.Mode)
+	}
+}
+
+func TestValidateTunables_LockedKnob_Audit(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeAudit)
+	_, resp := postValidate(t, h, `{"values":{"securityContext":{"runAsNonRoot":false}}}`)
+	if resp.Blocked {
+		t.Error("audit mode must not block")
+	}
+	if len(resp.Violations) == 0 {
+		t.Error("audit mode should still report violations for the UI to warn on")
+	}
+	if resp.Mode != policy.ModeAudit {
+		t.Errorf("mode = %q, want audit", resp.Mode)
+	}
+}
+
+func TestValidateTunables_BadJSON(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeEnforce)
+	rr, _ := postValidate(t, h, `{not json`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestValidateTunables_NilAllowlist(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, nil, nil, nil)
+	rr, resp := postValidate(t, h, `{"values":{"securityContext":{"runAsNonRoot":false}}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if resp.Blocked || len(resp.Violations) != 0 {
+		t.Errorf("nil allowlist should report no violations, got %+v", resp)
+	}
+}

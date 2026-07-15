@@ -17,6 +17,7 @@ func NewRouter(deployment *handler.Deployment, logger *slog.Logger) http.Handler
 	mux.HandleFunc("GET /readyz", health.Readiness)
 
 	mux.HandleFunc("POST /api/v1/deployments", deployment.Create)
+	mux.HandleFunc("POST /api/v1/deployments:validate", deployment.ValidateTunables)
 	mux.HandleFunc("GET /api/v1/deployments/{id}", deployment.Status)
 
 	var h http.Handler = mux

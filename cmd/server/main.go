@@ -93,7 +93,7 @@ func run() error {
 	}
 
 	// HTTP handler + router
-	deploymentHandler := handler.NewDeployment(app, nil, logger)
+	deploymentHandler := handler.NewDeployment(app, nil, allowlist, logger)
 	router := httpadapter.NewRouter(deploymentHandler, logger)
 
 	srv := &http.Server{

@@ -17,12 +17,14 @@ import (
 type Deployment struct {
 	app       deploymentapp.Application
 	validator port.TokenValidator
+	allowlist port.TunableAllowlist
 	logger    *slog.Logger
 }
 
-// NewDeployment creates a deployment HTTP handler.
-func NewDeployment(app deploymentapp.Application, validator port.TokenValidator, logger *slog.Logger) *Deployment {
-	return &Deployment{app: app, validator: validator, logger: logger}
+// NewDeployment creates a deployment HTTP handler. allowlist may be nil (the
+// validate endpoint then reports no violations).
+func NewDeployment(app deploymentapp.Application, validator port.TokenValidator, allowlist port.TunableAllowlist, logger *slog.Logger) *Deployment {
+	return &Deployment{app: app, validator: validator, allowlist: allowlist, logger: logger}
 }
 
 type createRequest struct {
@@ -148,4 +150,40 @@ func (h *Deployment) Status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, dto)
+}
+
+// validateRequest is the body of POST /api/v1/deployments:validate.
+type validateRequest struct {
+	Values map[string]any `json:"values"`
+}
+
+// validateResponse is the advisory J3 verdict for a values overlay.
+type validateResponse struct {
+	Mode       string   `json:"mode"`
+	Violations []string `json:"violations"`
+	Blocked    bool     `json:"blocked"`
+}
+
+// ValidateTunables handles POST /api/v1/deployments:validate — a non-mutating
+// dry-run of the J3 tunable-allowlist check over a values overlay, for the
+// portal create wizard. Always returns 200 with the verdict; blocked = the
+// overlay would be rejected at create (enforce mode). Dev-open: no OIDC, no
+// secrets, values only.
+func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
+	var req validateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", fmt.Sprintf("invalid request: %v", err))
+		return
+	}
+
+	resp := validateResponse{Mode: "disabled", Violations: []string{}}
+	if h.allowlist != nil {
+		dec := h.allowlist.Validate(r.Context(), req.Values)
+		resp.Mode = dec.Mode
+		resp.Blocked = dec.Reject
+		if dec.Violations != nil {
+			resp.Violations = dec.Violations
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
