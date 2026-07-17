@@ -2,15 +2,26 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
+	"github.com/myorg/platform-orchestrator/internal/application/port"
 )
+
+var errStubReject = errors.New("stub: token rejected")
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func newValidateHandler(t *testing.T, mode string) *Deployment {
 	t.Helper()
@@ -134,5 +145,55 @@ func TestValidateTunables_NilAllowlist(t *testing.T) {
 	}
 	if resp.Blocked || len(resp.Violations) != 0 {
 		t.Errorf("nil allowlist should report no violations, got %+v", resp)
+	}
+}
+
+// --- Create auth boundary (ADR-0015) ---------------------------------------
+
+// stubValidator lets a Create test drive the auth path without a real tenant.
+type stubValidator struct {
+	claims port.OIDCClaims
+	err    error
+}
+
+func (s stubValidator) Validate(_ context.Context, _ string) (port.OIDCClaims, error) {
+	return s.claims, s.err
+}
+
+func postCreate(t *testing.T, h *Deployment, authHeader, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments", bytes.NewBufferString(body))
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	rr := httptest.NewRecorder()
+	h.Create(rr, req)
+	return rr
+}
+
+// A nil validator must fail closed with 401, never panic on the nil interface.
+func TestCreate_NilValidator_FailsClosed(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, nil, nil, discardLogger())
+	rr := postCreate(t, h, "Bearer whatever", `{}`)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// A configured validator with no bearer header → 401.
+func TestCreate_MissingBearer_Returns401(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{}, nil, discardLogger())
+	rr := postCreate(t, h, "", `{}`)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// A token the validator rejects → 401.
+func TestCreate_InvalidToken_Returns401(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{err: errStubReject}, nil, discardLogger())
+	rr := postCreate(t, h, "Bearer bad", `{}`)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
 	}
 }

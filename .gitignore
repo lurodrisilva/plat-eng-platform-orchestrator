@@ -26,3 +26,4 @@ Thumbs.db
 # Environment / secrets
 .env
 *.pem
+graphify-out/

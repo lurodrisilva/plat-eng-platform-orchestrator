@@ -38,10 +38,10 @@ type createRequest struct {
 		Digest     string `json:"digest"`
 	} `json:"image"`
 	Chart struct {
-		Repository      string `json:"repository"`
-		Name            string `json:"name"`
+		Repository        string `json:"repository"`
+		Name              string `json:"name"`
 		VersionConstraint string `json:"versionConstraint"`
-		AllowPrerelease bool   `json:"allowPrerelease"`
+		AllowPrerelease   bool   `json:"allowPrerelease"`
 	} `json:"chart"`
 	Target struct {
 		Environment string `json:"environment"`
@@ -65,6 +65,16 @@ type createRequest struct {
 func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := telemetry.Enrich(ctx, h.logger)
+
+	// Fail closed when the validator is unconfigured (ADR-0015). A nil validator
+	// means the deploy could not build an Entra verifier at startup; answering
+	// 401 keeps the endpoint shut rather than panicking on the nil interface —
+	// an unauthenticated create must never fall through to the use-case.
+	if h.validator == nil {
+		logger.ErrorContext(ctx, "token validator is not configured; refusing the request")
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "authentication is not configured")
+		return
+	}
 
 	// Validate OIDC token
 	token := extractBearer(r.Header.Get("Authorization"))

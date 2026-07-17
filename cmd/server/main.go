@@ -15,6 +15,7 @@ import (
 
 	httpadapter "github.com/myorg/platform-orchestrator/internal/adapter/inbound/http"
 	"github.com/myorg/platform-orchestrator/internal/adapter/inbound/http/handler"
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/entra"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/persistence"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
@@ -92,8 +93,21 @@ func run() error {
 		},
 	}
 
+	// OIDC token validator (ADR-0015). Built from the configured issuer/audience;
+	// verification is public-key only, so this holds no credential. A build
+	// failure here is fatal: the tenant is unreachable or misconfigured, and the
+	// service must not start accepting tokens it cannot verify.
+	validator, err := entra.New(ctx, cfg.Auth.OIDC.Issuer, cfg.Auth.OIDC.Audience, logger)
+	if err != nil {
+		logger.Error("failed to build OIDC token validator", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	logger.Info("OIDC token validator ready",
+		slog.String("issuer", cfg.Auth.OIDC.Issuer),
+		slog.String("audience", cfg.Auth.OIDC.Audience))
+
 	// HTTP handler + router
-	deploymentHandler := handler.NewDeployment(app, nil, allowlist, logger)
+	deploymentHandler := handler.NewDeployment(app, validator, allowlist, logger)
 	router := httpadapter.NewRouter(deploymentHandler, logger)
 
 	srv := &http.Server{
