@@ -59,6 +59,10 @@ spec:
               mountPath: /etc/config
             - name: policies
               mountPath: /etc/policies
+            # Writable scratch for the chart composer (chartutil.Save writes a
+            # temp dir); readOnlyRootFilesystem makes / read-only.
+            - name: tmp
+              mountPath: /tmp
           livenessProbe:
             httpGet:
               path: /healthz
@@ -97,6 +101,8 @@ spec:
         - name: policies
           configMap:
             name: platform-orchestrator-policies
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
