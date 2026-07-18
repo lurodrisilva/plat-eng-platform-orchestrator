@@ -58,16 +58,21 @@ func (c *Composer) Compose(ctx context.Context, archive []byte, values, platform
 	if err != nil {
 		return port.ComposedChart{}, fmt.Errorf("compose: load archive: %w", err)
 	}
+	if chrt.Metadata == nil {
+		return port.ComposedChart{}, fmt.Errorf("compose: archive has no chart metadata")
+	}
 
 	// defaults < user < platform (platform wins). deepMerge deep-copies, so the
 	// chart's own defaults and the caller's maps are never mutated.
 	merged := deepMerge(deepMerge(chrt.Values, values), platformValues)
-	chrt.Values = merged
 
-	// chartutil.Save serializes values.yaml from chrt.Raw, NOT chrt.Values
-	// (helm save.go), so the merged values only survive repackaging if written
-	// back into the raw values.yaml file. Marshal with sigs.k8s.io/yaml to match
-	// how helm's loader parses it back into map[string]any.
+	// The packaged values.yaml is what actually ships: helm's chartutil.Save
+	// serializes values.yaml from chrt.Raw, NOT chrt.Values (save.go), so the
+	// merged values are written into the raw values.yaml file below. chrt.Values
+	// is set too, only to keep the in-memory chart self-consistent for any
+	// in-process reader; Save ignores it. Marshal with sigs.k8s.io/yaml to match
+	// how helm's loader parses values.yaml back into map[string]any.
+	chrt.Values = merged
 	mergedYAML, err := yaml.Marshal(merged)
 	if err != nil {
 		return port.ComposedChart{}, fmt.Errorf("compose: marshal merged values: %w", err)

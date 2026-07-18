@@ -155,6 +155,36 @@ func TestCompose_DoesNotMutateInputs(t *testing.T) {
 	}
 }
 
+// A chart with no values.yaml in Raw must still get its merged values baked —
+// the composer appends the file rather than only replacing it.
+func TestCompose_AppendsValuesWhenChartHasNone(t *testing.T) {
+	c := &chart.Chart{
+		Metadata: &chart.Metadata{APIVersion: "v2", Name: "novalues", Version: "0.1.0"},
+		Templates: []*chart.File{
+			{Name: "templates/cm.yaml", Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")},
+		},
+	}
+	dir := t.TempDir()
+	path, err := chartutil.Save(c, dir)
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	archive, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	out, err := NewComposer(testLogger()).Compose(context.Background(), archive,
+		map[string]any{"user": "u"}, map[string]any{"platform": "p"}, "1.0.0", "", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	loaded := loadComposed(t, out.PackageBytes)
+	if loaded.Values["user"] != "u" || loaded.Values["platform"] != "p" {
+		t.Errorf("append path lost values: %v", loaded.Values)
+	}
+}
+
 func TestCompose_Guards(t *testing.T) {
 	comp := NewComposer(testLogger())
 	if _, err := comp.Compose(context.Background(), nil, nil, nil, "1.0.0", "", nil); err == nil {

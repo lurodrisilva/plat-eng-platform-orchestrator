@@ -78,10 +78,14 @@ func (r *Resolver) Resolve(ctx context.Context, repository, name, constraint str
 		return port.ResolvedChart{}, fmt.Errorf("oci resolve: pulled %s but got no chart data", ref)
 	}
 
+	digest := ""
+	if pulled.Manifest != nil {
+		digest = pulled.Manifest.Digest
+	}
 	r.logger.InfoContext(ctx, "resolved chart from OCI",
 		slog.String("repository", repoRef),
 		slog.String("version", chosen),
-		slog.String("digest", pulled.Manifest.Digest),
+		slog.String("digest", digest),
 	)
 
 	return port.ResolvedChart{
