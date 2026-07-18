@@ -17,12 +17,12 @@ type Deployment struct {
 	values        map[string]any
 	correlationID string
 
-	status    Status
-	metadata  *Metadata
-	artifact  *Artifact
-	argoApp   *ArgoApp
-	health    *Health
-	errMsg    string
+	status   Status
+	metadata *Metadata
+	artifact *Artifact
+	argoApp  *ArgoApp
+	health   *Health
+	errMsg   string
 
 	startedAt   time.Time
 	completedAt time.Time
@@ -141,20 +141,20 @@ func Reconstitute(
 
 // --- Getters ---
 
-func (d *Deployment) ID() DeploymentID        { return d.id }
+func (d *Deployment) ID() DeploymentID         { return d.id }
 func (d *Deployment) ApplicationID() string    { return d.applicationID }
 func (d *Deployment) Team() string             { return d.team }
 func (d *Deployment) Image() Image             { return d.image }
 func (d *Deployment) ChartSource() ChartSource { return d.chartSource }
 func (d *Deployment) Target() Target           { return d.target }
-func (d *Deployment) Source() Source            { return d.source }
+func (d *Deployment) Source() Source           { return d.source }
 func (d *Deployment) Values() map[string]any   { return copyValues(d.values) }
 func (d *Deployment) CorrelationID() string    { return d.correlationID }
 func (d *Deployment) Status() Status           { return d.status }
 func (d *Deployment) Metadata() *Metadata      { return d.metadata }
-func (d *Deployment) ArtifactInfo() *Artifact   { return d.artifact }
+func (d *Deployment) ArtifactInfo() *Artifact  { return d.artifact }
 func (d *Deployment) ArgoApp() *ArgoApp        { return d.argoApp }
-func (d *Deployment) HealthInfo() *Health       { return d.health }
+func (d *Deployment) HealthInfo() *Health      { return d.health }
 func (d *Deployment) Error() string            { return d.errMsg }
 func (d *Deployment) StartedAt() time.Time     { return d.startedAt }
 func (d *Deployment) CompletedAt() time.Time   { return d.completedAt }
@@ -203,12 +203,15 @@ func (d *Deployment) SetHealth(h Health) {
 	d.updatedAt = time.Now().UTC()
 }
 
-// Fail marks the deployment as failed with an error message.
+// Fail marks the deployment as failed with an error message. The message is
+// recorded before the transition is attempted so the failure context survives
+// even when the current state cannot move to FAILED (e.g. still RECEIVED): the
+// caller persists the aggregate and the error is not lost.
 func (d *Deployment) Fail(msg string) error {
+	d.errMsg = msg
 	if err := d.TransitionTo(StatusFailed); err != nil {
 		return err
 	}
-	d.errMsg = msg
 	d.completedAt = time.Now().UTC()
 	return nil
 }

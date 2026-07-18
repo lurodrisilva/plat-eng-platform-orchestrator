@@ -10,14 +10,13 @@ Binary entrypoints. Each subdirectory builds to one executable in `bin/`. This i
 | Directory | Purpose |
 |-----------|---------|
 | `server/` | HTTP API server entrypoint (see `server/AGENTS.md`) |
-| `worker/` | Temporal worker entrypoint — stub, not yet wired (see `worker/AGENTS.md`) |
 
 ## For AI Agents
 
 ### Working In This Directory
 - Keep `main.go` files thin — config load, telemetry init, adapter wiring, server start, graceful shutdown.
 - No business logic here. If you write logic in `cmd/**`, move it to `internal/application` or `internal/domain`.
-- Build via `make build-server` / `make build-worker`.
+- Build via `make build-server`. The composition root wires the async in-process deploy executor (ADR-0016) into `app.Executor` — there is no separate worker binary.
 
 ### Common Patterns
 - `run()` returns error; `main()` exits non-zero on error.

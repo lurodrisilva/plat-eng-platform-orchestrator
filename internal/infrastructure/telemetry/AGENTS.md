@@ -14,7 +14,7 @@ OTel tracer provider bootstrap + structured `slog` JSON logger + helper to enric
 ## For AI Agents
 
 ### Working In This Directory
-- Server / worker should call `Init` once and `defer tp.Shutdown(ctx)` with a 5s timeout.
+- The server should call `Init` once and `defer tp.Shutdown(ctx)` with a 5s timeout.
 - Exporter is **OTLP gRPC only**. Switching to HTTP requires `otlptracehttp` import + endpoint scheme handling.
 - Default sampler when `TracesSampleRate >= 1.0` is `AlwaysSample`; below 1.0 uses `TraceIDRatioBased`. Sampling decisions are head-based; no tail sampling.
 - `NewLogger` calls `slog.SetDefault(logger)` — that means after `Init`, `slog.Info` anywhere in the process picks up the service attr.

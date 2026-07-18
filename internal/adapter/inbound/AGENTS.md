@@ -14,7 +14,7 @@ Driving adapters — entry points that translate external requests (currently on
 ## For AI Agents
 
 ### Working In This Directory
-- Add a new transport (gRPC, NATS, Temporal signal listener) as a sibling under `inbound/`.
+- Add a new transport (gRPC, NATS) as a sibling under `inbound/`.
 - Inbound handlers depend only on `internal/application/deployment` + `internal/application/port` — never on adapters or domain mutators directly.
 
 <!-- MANUAL: -->

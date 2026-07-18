@@ -51,6 +51,40 @@ type deploymentDoc struct {
 	StartedAt     time.Time `bson:"startedAt"`
 	CompletedAt   time.Time `bson:"completedAt,omitempty"`
 	UpdatedAt     time.Time `bson:"updatedAt"`
+
+	// Pipeline outputs — populated as the deployment advances (ADR-0016).
+	Metadata *metadataDoc `bson:"metadata,omitempty"`
+	Artifact *artifactDoc `bson:"artifact,omitempty"`
+	ArgoApp  *argoAppDoc  `bson:"argoApp,omitempty"`
+	Health   *healthDoc   `bson:"health,omitempty"`
+}
+
+type metadataDoc struct {
+	ComponentID       string            `bson:"componentId"`
+	DeploymentVersion string            `bson:"deploymentVersion"`
+	ArgoAppName       string            `bson:"argoAppName"`
+	Labels            map[string]string `bson:"labels,omitempty"`
+}
+
+type artifactDoc struct {
+	OCIReference string `bson:"ociReference"`
+	Digest       string `bson:"digest"`
+	Registry     string `bson:"registry"`
+	Repository   string `bson:"repository"`
+	Tag          string `bson:"tag"`
+}
+
+type argoAppDoc struct {
+	Name      string `bson:"name"`
+	Namespace string `bson:"namespace"`
+	Project   string `bson:"project"`
+}
+
+type healthDoc struct {
+	SyncStatus   string    `bson:"syncStatus"`
+	HealthStatus string    `bson:"healthStatus"`
+	Message      string    `bson:"message,omitempty"`
+	EvaluatedAt  time.Time `bson:"evaluatedAt"`
 }
 
 func (r *DeploymentRepository) Save(ctx context.Context, d *deployment.Deployment) error {
@@ -114,7 +148,7 @@ func (r *DeploymentRepository) FindByApplication(ctx context.Context, appID, env
 }
 
 func toDoc(d *deployment.Deployment) deploymentDoc {
-	return deploymentDoc{
+	doc := deploymentDoc{
 		ID:            d.ID().String(),
 		ApplicationID: d.ApplicationID(),
 		Team:          d.Team(),
@@ -141,6 +175,31 @@ func toDoc(d *deployment.Deployment) deploymentDoc {
 		CompletedAt:   d.CompletedAt(),
 		UpdatedAt:     d.UpdatedAt(),
 	}
+
+	if m := d.Metadata(); m != nil {
+		doc.Metadata = &metadataDoc{
+			ComponentID:       m.ComponentID.String(),
+			DeploymentVersion: m.DeploymentVersion.String(),
+			ArgoAppName:       m.ArgoAppName.String(),
+			Labels:            m.Labels,
+		}
+	}
+	if a := d.ArtifactInfo(); a != nil {
+		doc.Artifact = &artifactDoc{
+			OCIReference: a.OCIReference, Digest: a.Digest, Registry: a.Registry,
+			Repository: a.Repository, Tag: a.Tag,
+		}
+	}
+	if g := d.ArgoApp(); g != nil {
+		doc.ArgoApp = &argoAppDoc{Name: g.Name, Namespace: g.Namespace, Project: g.Project}
+	}
+	if hl := d.HealthInfo(); hl != nil {
+		doc.Health = &healthDoc{
+			SyncStatus: hl.SyncStatus, HealthStatus: hl.HealthStatus,
+			Message: hl.Message, EvaluatedAt: hl.EvaluatedAt,
+		}
+	}
+	return doc
 }
 
 func fromDoc(doc deploymentDoc) (*deployment.Deployment, error) {
@@ -169,13 +228,41 @@ func fromDoc(doc deploymentDoc) (*deployment.Deployment, error) {
 		return nil, fmt.Errorf("reconstitute source: %w", err)
 	}
 
+	var metadata *deployment.Metadata
+	if m := doc.Metadata; m != nil {
+		metadata = &deployment.Metadata{
+			ComponentID:       deployment.ComponentID(m.ComponentID),
+			DeploymentVersion: deployment.DeploymentVersion(m.DeploymentVersion),
+			ArgoAppName:       deployment.ArgoAppName(m.ArgoAppName),
+			Labels:            m.Labels,
+		}
+	}
+	var artifact *deployment.Artifact
+	if a := doc.Artifact; a != nil {
+		artifact = &deployment.Artifact{
+			OCIReference: a.OCIReference, Digest: a.Digest, Registry: a.Registry,
+			Repository: a.Repository, Tag: a.Tag,
+		}
+	}
+	var argoApp *deployment.ArgoApp
+	if g := doc.ArgoApp; g != nil {
+		argoApp = &deployment.ArgoApp{Name: g.Name, Namespace: g.Namespace, Project: g.Project}
+	}
+	var health *deployment.Health
+	if hl := doc.Health; hl != nil {
+		health = &deployment.Health{
+			SyncStatus: hl.SyncStatus, HealthStatus: hl.HealthStatus,
+			Message: hl.Message, EvaluatedAt: hl.EvaluatedAt,
+		}
+	}
+
 	return deployment.Reconstitute(
 		deployment.DeploymentID(doc.ID),
 		doc.ApplicationID, doc.Team,
 		image, chart, target, source,
 		nil, doc.CorrelationID,
 		status,
-		nil, nil, nil, nil,
+		metadata, artifact, argoApp, health,
 		doc.ErrMsg,
 		doc.StartedAt, doc.CompletedAt, doc.UpdatedAt,
 	), nil

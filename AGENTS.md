@@ -11,18 +11,17 @@ Go-based deployment control plane that sits between GitHub Actions and Argo CD. 
 | `go.mod` | Go module manifest (Go 1.25, Helm v3, Mongo driver, OTel, x/mod/semver) |
 | `Makefile` | Build/test/lint/vet/docker-build/govulncheck targets |
 | `Dockerfile.server` | Distroless multi-stage build for API server |
-| `Dockerfile.worker` | Distroless multi-stage build for worker (Temporal — not yet wired) |
-| `config.yaml` | Runtime config (server, temporal, OIDC, argocd, OCI, github, documentdb, otel, policies) — supports `${ENV_VAR:-default}` expansion |
+| `config.yaml` | Runtime config (server, OIDC, argocd, OCI, github, documentdb, otel, policies) — supports `${ENV_VAR:-default}` expansion |
 | `README.md` | Project name placeholder |
 | `.gitignore` | Standard Go ignores |
 
 ## Subdirectories
 | Directory | Purpose |
 |-----------|---------|
-| `cmd/` | Binary entrypoints (`server`, `worker`) (see `cmd/AGENTS.md`) |
+| `cmd/` | Binary entrypoint (`server`) (see `cmd/AGENTS.md`) |
 | `internal/` | Library code — domain, application, adapters, infrastructure (see `internal/AGENTS.md`) |
 | `policies/` | Deployment policy YAML (environment rules, freeze windows) (see `policies/AGENTS.md`) |
-| `deploy/` | Kubernetes manifests for server + worker (see `deploy/AGENTS.md`) |
+| `deploy/` | Kubernetes manifests for the server (see `deploy/AGENTS.md`) |
 | `api-tests/` | Bruno API test collection (see `api-tests/AGENTS.md`) |
 | `.github/` | CI workflows (see `.github/AGENTS.md`) |
 
