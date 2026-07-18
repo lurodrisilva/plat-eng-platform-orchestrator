@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"log/slog"
@@ -35,6 +36,15 @@ type DeployExecutionHandler struct {
 	argocd    port.ArgoCD
 	cfg       ExecutionConfig
 	logger    *slog.Logger
+
+	// inflight guards against two goroutines driving the same deployment at once
+	// (e.g. the Create trigger racing a :deploy re-drive, or a double re-drive).
+	// Each Execute upserts the aggregate, so concurrent drives would last-write-win
+	// and lose transitions. This is a single-process guard; across replicas the
+	// persistence layer still needs optimistic concurrency — see the note on
+	// Execute — but it closes the common same-pod window cheaply.
+	mu       sync.Mutex
+	inflight map[deployment.DeploymentID]struct{}
 }
 
 // NewDeployExecutionHandler wires the executor. logger is optional.
@@ -65,13 +75,45 @@ func NewDeployExecutionHandler(
 	return &DeployExecutionHandler{
 		repo: repo, resolver: resolver, composer: composer,
 		publisher: publisher, argocd: argocd, cfg: cfg, logger: logger,
+		inflight: map[deployment.DeploymentID]struct{}{},
 	}
+}
+
+// acquire marks a deployment as being driven. It returns false if another
+// goroutine in this process is already driving it.
+func (h *DeployExecutionHandler) acquire(id deployment.DeploymentID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, busy := h.inflight[id]; busy {
+		return false
+	}
+	h.inflight[id] = struct{}{}
+	return true
+}
+
+func (h *DeployExecutionHandler) release(id deployment.DeploymentID) {
+	h.mu.Lock()
+	delete(h.inflight, id)
+	h.mu.Unlock()
 }
 
 // Execute loads a deployment and drives it forward. Terminal deployments are a
 // no-op. On any step error the aggregate is marked FAILED and persisted, and
 // the error is returned (callers run this in a goroutine and only log it).
+//
+// Concurrency: a per-deployment in-process lock (acquire/release) prevents two
+// goroutines in this process from driving the same deployment simultaneously.
+// It does NOT coordinate across replicas — a horizontally-scaled deployment
+// needs optimistic concurrency (a version/updatedAt CAS) in the repository Save
+// to be fully safe; that is a persistence-layer follow-up.
 func (h *DeployExecutionHandler) Execute(ctx context.Context, id deployment.DeploymentID) error {
+	if !h.acquire(id) {
+		h.logger.InfoContext(ctx, "deployment already being driven; skipping concurrent execution",
+			slog.String("id", id.String()))
+		return nil
+	}
+	defer h.release(id)
+
 	d, err := h.repo.FindByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("execute: load %s: %w", id, err)
@@ -103,6 +145,18 @@ func (h *DeployExecutionHandler) Execute(ctx context.Context, id deployment.Depl
 // current status, so a re-drive resumes where it left off. Transient chart data
 // (archive) is lazily (re-)resolved; post-publish stages read persisted state.
 func (h *DeployExecutionHandler) run(ctx context.Context, d *deployment.Deployment) error {
+	// Invariant: metadata is set on the VALIDATING→METADATA_GENERATED step, so any
+	// state at or beyond METADATA_GENERATED must carry it. Guard the invariant here
+	// rather than deref a nil Metadata() downstream — this runs in a detached
+	// goroutine, so a nil panic would take the process down instead of failing the
+	// one deployment. A persisted state past metadata with nil metadata means a
+	// corrupt/partial record; fail it cleanly.
+	if d.Status() != deployment.StatusReceived &&
+		d.Status() != deployment.StatusValidating &&
+		d.Metadata() == nil {
+		return fmt.Errorf("run: deployment at %s has no metadata (corrupt state)", d.Status())
+	}
+
 	// RECEIVED → VALIDATING
 	if d.Status() == deployment.StatusReceived {
 		if err := h.step(ctx, d, deployment.StatusValidating); err != nil {
@@ -222,7 +276,11 @@ func (h *DeployExecutionHandler) run(ctx context.Context, d *deployment.Deployme
 			if err := h.step(ctx, d, deployment.StatusDegraded); err != nil {
 				return err
 			}
-			return fmt.Errorf("deployment degraded: %s", d.HealthInfo().Message)
+			msg := "convergence timeout"
+			if hl := d.HealthInfo(); hl != nil {
+				msg = hl.Message
+			}
+			return fmt.Errorf("deployment degraded: %s", msg)
 		}
 	}
 

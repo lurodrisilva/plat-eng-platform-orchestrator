@@ -314,3 +314,51 @@ func TestExecute_LoadError_Propagates(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
+
+func TestExecute_InflightGuard_BlocksConcurrentDrive(t *testing.T) {
+	h := NewDeployExecutionHandler(newStoreRepo(), &fakeResolver{}, &fakeComposer{}, &fakePublisher{}, &fakeArgoCD{}, fastCfg(), nil)
+	id := deployment.DeploymentID("dep-1")
+
+	if !h.acquire(id) {
+		t.Fatal("first acquire should succeed")
+	}
+	if h.acquire(id) {
+		t.Fatal("second acquire must fail while in-flight")
+	}
+	if !h.acquire(deployment.DeploymentID("dep-2")) {
+		t.Fatal("a different deployment must acquire independently")
+	}
+	h.release(id)
+	if !h.acquire(id) {
+		t.Fatal("acquire must succeed again after release")
+	}
+}
+
+func TestExecute_CorruptState_NoMetadata_FailsCleanly(t *testing.T) {
+	// A record persisted past METADATA_GENERATED but with nil metadata is corrupt.
+	// The executor must fail it cleanly (not panic in the detached goroutine).
+	base := newReceivedDeployment(t)
+	now := time.Now().UTC()
+	corrupt := deployment.Reconstitute(
+		base.ID(), base.ApplicationID(), base.Team(),
+		base.Image(), base.ChartSource(), base.Target(), base.Source(),
+		nil, base.CorrelationID(),
+		deployment.StatusChartResolved,
+		nil, nil, nil, nil, // metadata nil despite CHART_RESOLVED
+		"", now, time.Time{}, now,
+	)
+	repo := newStoreRepo(corrupt)
+	h := NewDeployExecutionHandler(repo, &fakeResolver{}, &fakeComposer{}, &fakePublisher{}, &fakeArgoCD{}, fastCfg(), nil)
+
+	err := h.Execute(context.Background(), base.ID())
+	if err == nil {
+		t.Fatal("expected corrupt-state error, got nil")
+	}
+	// Fail() records the error before the (valid) CHART_RESOLVED→FAILED transition.
+	if got := corrupt.Status(); got != deployment.StatusFailed {
+		t.Fatalf("status = %s, want FAILED", got)
+	}
+	if corrupt.Error() == "" {
+		t.Error("error message must be persisted on the failed deployment")
+	}
+}
