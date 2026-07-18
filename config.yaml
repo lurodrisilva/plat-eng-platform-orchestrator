@@ -50,7 +50,7 @@ otel:
   insecure: true
 
 policies:
-  configPath: "policies/default.yaml"
+  configPath: "${POLICIES_CONFIG_PATH:-policies/default.yaml}"
 
 deploymentDefaults:
   syncTimeoutSeconds: 600
