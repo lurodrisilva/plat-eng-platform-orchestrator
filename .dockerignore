@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+.omc
+graphify-out
+deploy
+docs
+api-tests
+*.md
+**/AGENTS.md
+bin
+coverage.out
+coverage.html
+Dockerfile*
+.dockerignore
