@@ -78,8 +78,14 @@ spec:
               memory: 512Mi
           securityContext:
             runAsNonRoot: true
+            # Distroless nonroot is a named user; pin the numeric UID/GID (65532)
+            # so the kubelet can verify non-root under runAsNonRoot.
+            runAsUser: 65532
+            runAsGroup: 65532
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop: ["ALL"]
       volumes:

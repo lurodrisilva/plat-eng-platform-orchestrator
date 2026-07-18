@@ -3,10 +3,30 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// expandEnv expands ${VAR} and ${VAR:-default} references in s. Unlike
+// os.ExpandEnv it honors the shell-style `:-default` fallback the config file
+// relies on: an unset OR empty VAR yields the default. Plain $VAR is also
+// expanded. This is the substitution the config.yaml and docs advertise;
+// os.ExpandEnv alone treats `VAR:-default` as a single (missing) variable name
+// and silently produces an empty value.
+func expandEnv(s string) string {
+	return os.Expand(s, func(key string) string {
+		name, def := key, ""
+		if i := strings.Index(key, ":-"); i >= 0 {
+			name, def = key[:i], key[i+2:]
+		}
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+		return def
+	})
+}
 
 // Config holds all application configuration.
 type Config struct {
@@ -89,7 +109,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	expanded := os.ExpandEnv(string(data))
+	expanded := expandEnv(string(data))
 
 	cfg := &Config{}
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
