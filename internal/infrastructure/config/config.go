@@ -11,7 +11,6 @@ import (
 // Config holds all application configuration.
 type Config struct {
 	Server   Server   `yaml:"server"`
-	Temporal Temporal `yaml:"temporal"`
 	Auth     Auth     `yaml:"auth"`
 	ArgoCD   ArgoCD   `yaml:"argocd"`
 	OCI      OCI      `yaml:"oci"`
@@ -28,12 +27,6 @@ type Server struct {
 	WriteTimeout time.Duration `yaml:"writeTimeout"`
 }
 
-type Temporal struct {
-	HostPort  string `yaml:"hostPort"`
-	Namespace string `yaml:"namespace"`
-	TaskQueue string `yaml:"taskQueue"`
-}
-
 type Auth struct {
 	OIDC                OIDC     `yaml:"oidc"`
 	AllowedRepositories []string `yaml:"allowedRepositories"`
@@ -48,6 +41,8 @@ type OIDC struct {
 type ArgoCD struct {
 	ServerURL string `yaml:"serverURL"`
 	Token     string `yaml:"-"`
+	// AppNamespace is the namespace the ArgoCD Application objects live in.
+	AppNamespace string `yaml:"appNamespace"`
 }
 
 type OCI struct {
@@ -115,11 +110,8 @@ func applyDefaults(c *Config) {
 	if c.Server.WriteTimeout == 0 {
 		c.Server.WriteTimeout = 60 * time.Second
 	}
-	if c.Temporal.Namespace == "" {
-		c.Temporal.Namespace = "default"
-	}
-	if c.Temporal.TaskQueue == "" {
-		c.Temporal.TaskQueue = "deployment-workers"
+	if c.ArgoCD.AppNamespace == "" {
+		c.ArgoCD.AppNamespace = "argocd"
 	}
 	if c.Auth.OIDC.Issuer == "" {
 		c.Auth.OIDC.Issuer = "https://token.actions.githubusercontent.com"
@@ -148,9 +140,6 @@ func applyDefaults(c *Config) {
 }
 
 func validate(c *Config) error {
-	if c.Temporal.HostPort == "" {
-		return fmt.Errorf("temporal.hostPort is required")
-	}
 	if c.Auth.OIDC.Audience == "" {
 		return fmt.Errorf("auth.oidc.audience is required")
 	}

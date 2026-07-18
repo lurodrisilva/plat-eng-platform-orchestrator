@@ -4,12 +4,12 @@
 # deploy
 
 ## Purpose
-Kubernetes deployment manifests for the platform-orchestrator server + worker.
+Kubernetes deployment manifests for the platform-orchestrator server.
 
 ## Subdirectories
 | Directory | Purpose |
 |-----------|---------|
-| `kubernetes/` | `Deployment` + `Service` manifests for `server` and `worker` (see `kubernetes/AGENTS.md`) |
+| `kubernetes/` | `Deployment` + `Service` manifests for `server` (see `kubernetes/AGENTS.md`) |
 
 ## For AI Agents
 

@@ -3,11 +3,6 @@ server:
   readTimeout: 30s
   writeTimeout: 60s
 
-temporal:
-  hostPort: "${TEMPORAL_HOST_PORT:-localhost:7233}"
-  namespace: "${TEMPORAL_NAMESPACE:-default}"
-  taskQueue: "deployment-workers"
-
 auth:
   oidc:
     # Microsoft Entra ID, v1 issuer (ADR-0015). The v2.0 issuer is
@@ -24,10 +19,15 @@ auth:
 
 argocd:
   serverURL: "${ARGOCD_SERVER_URL:-https://argocd.example.com}"
+  # Namespace the ArgoCD Application objects are created in (in-cluster ArgoCD).
+  appNamespace: "${ARGOCD_APP_NAMESPACE:-argocd}"
   insecure: false
 
 oci:
-  registry: "${OCI_REGISTRY:-myregistry.azurecr.io}"
+  # Composed charts are published to ACR, pulled by ArgoCD via workload identity
+  # (secretless — ADR-0021 §3 gate 2). The base umbrella still resolves from
+  # GHCR-public anonymously.
+  registry: "${OCI_REGISTRY:-acrdevbf6cc837.azurecr.io}"
   repositoryPrefix: ""
 
 github:

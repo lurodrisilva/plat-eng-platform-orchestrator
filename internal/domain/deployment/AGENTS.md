@@ -12,7 +12,7 @@ The deployment bounded context. Contains the `Deployment` aggregate root, immuta
 | `entity.go` | `Deployment` aggregate root + `Metadata`/`Artifact`/`ArgoApp`/`Health` value objects, `New`/`Reconstitute`, state transition methods (`TransitionTo`, `Complete`, `Fail`, `Reject`), deep-copied `values` map |
 | `valueobject.go` | `DeploymentID`, `ComponentID`, `DeploymentVersion`, `ArgoAppName`, `Image`, `Target`, `Source`, `ChartSource` — all validated in constructors |
 | `status.go` | `Status` enum (1..14: RECEIVED..COMPLETED), `_transitions` allow-map, `_terminalStatuses`, `CanTransitionTo`, `IsTerminal`, `IsSuccess`, `ParseStatus` |
-| `errors.go` | Sentinel errors (`ErrNotFound`, `ErrPolicyViolation`, `ErrInvalidTransition`, chart errors, auth errors) + `NonRetryableTypes()` for Temporal |
+| `errors.go` | Sentinel errors (`ErrNotFound`, `ErrPolicyViolation`, `ErrInvalidTransition`, chart errors, auth errors) |
 | `repository.go` | `Repository` interface: `Save`, `FindByID`, `FindByApplication` (implemented by `adapter/outbound/persistence`) |
 | `entity_test.go` | Aggregate tests — construction, validation, transitions, values copy protection |
 | `status_test.go` | State machine tests — allowed/disallowed transitions, terminal status, String/Parse roundtrip |

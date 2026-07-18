@@ -13,17 +13,3 @@ var (
 	ErrAppProjectDenied = errors.New("app project access denied")
 	ErrAuthentication   = errors.New("authentication failed")
 )
-
-// NonRetryableTypes returns all error type names for Temporal retry exclusion.
-func NonRetryableTypes() []string {
-	return []string{
-		"PolicyViolationError",
-		"TunableLockedError",
-		"AuthenticationError",
-		"ChartValidationError",
-		"ChartNotFoundError",
-		"ChartDependencyError",
-		"AppProjectMismatchError",
-		"ValidationError",
-	}
-}

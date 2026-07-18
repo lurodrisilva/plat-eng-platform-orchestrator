@@ -9,7 +9,7 @@ GitHub Actions CI definitions for build, lint, vulnerability scan, and Docker im
 ## Key Files
 | File | Description |
 |------|-------------|
-| `ci.yaml` | Triggers on push/PR to `main`. Jobs: `build` (Go 1.24.2 — setup, mod download, build, vet, `go test -race -coverprofile=coverage.out -count=1`, upload coverage artifact); `lint` (`golangci/golangci-lint-action@v6` latest); `vulnerability-check` (`govulncheck ./...`); `docker` (only on `refs/heads/main`, after build+lint; builds both server + worker images tagged `${{ github.sha }}`) |
+| `ci.yaml` | Triggers on push/PR to `main`/`master`. Jobs: `build` (Go 1.25 — setup, mod download, build, vet, `go test -race -coverprofile=coverage.out -count=1`, upload coverage artifact); `lint` (golangci-lint installed from source); `vulnerability-check` (`govulncheck ./...`, advisory); `docker` (only on `refs/heads/main`, after build+lint; builds the server image tagged `${{ github.sha }}`) |
 
 ## For AI Agents
 

@@ -4,13 +4,10 @@ GO := go
 GOFLAGS := -v
 LDFLAGS := -s -w
 
-build: build-server build-worker
+build: build-server
 
 build-server:
 	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/server ./cmd/server
-
-build-worker:
-	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/worker ./cmd/worker
 
 test:
 	$(GO) test -race -count=1 ./...
@@ -33,7 +30,6 @@ clean:
 
 docker-build:
 	docker build -f Dockerfile.server -t platform-orchestrator-server:latest .
-	docker build -f Dockerfile.worker -t platform-orchestrator-worker:latest .
 
 mod-tidy:
 	$(GO) mod tidy

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
 	"github.com/myorg/platform-orchestrator/internal/application/port"
+	"github.com/myorg/platform-orchestrator/internal/domain/deployment"
 	"github.com/myorg/platform-orchestrator/internal/infrastructure/telemetry"
 )
 
@@ -135,12 +137,76 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fire the deploy pipeline asynchronously (ADR-0016 in-process executor):
+	// POST returns 202 immediately and the goroutine drives resolve→…→HEALTHY,
+	// persisting each transition for GET to read. Detach from the request
+	// context so the pipeline outlives the response while keeping telemetry
+	// baggage for correlation.
+	h.triggerDeploy(ctx, logger, result.DeploymentID)
+
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"deploymentId": result.DeploymentID,
 		"status":       result.Status,
 		"statusUrl":    fmt.Sprintf("/api/v1/deployments/%s", result.DeploymentID),
 		"createdAt":    time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// Redeploy handles POST /api/v1/deployments/{id}/deploy — re-drives a deployment
+// that stalled mid-flight (e.g. after a restart) through the pipeline from its
+// persisted state. Same auth as Create. Uses a path segment rather than the
+// :deploy colon convention because net/http's ServeMux cannot express a
+// wildcard with a colon suffix ({id}:deploy) in one segment.
+func (h *Deployment) Redeploy(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	logger := telemetry.Enrich(ctx, h.logger)
+
+	if h.validator == nil {
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "authentication is not configured")
+		return
+	}
+	token := extractBearer(r.Header.Get("Authorization"))
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing authorization header")
+		return
+	}
+	if _, err := h.validator.Validate(ctx, token); err != nil {
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", err.Error())
+		return
+	}
+
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing deployment ID")
+		return
+	}
+	if h.app.Executor == nil {
+		writeError(w, http.StatusServiceUnavailable, "EXECUTOR_UNAVAILABLE", "deploy executor is not configured")
+		return
+	}
+
+	h.triggerDeploy(ctx, logger, id)
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"deploymentId": id,
+		"statusUrl":    fmt.Sprintf("/api/v1/deployments/%s", id),
+	})
+}
+
+// triggerDeploy fires the executor in a detached goroutine, logging failures.
+// No-op when no executor is wired (handler tests).
+func (h *Deployment) triggerDeploy(ctx context.Context, logger *slog.Logger, id string) {
+	if h.app.Executor == nil {
+		return
+	}
+	depID := deployment.DeploymentID(id)
+	go func() {
+		bg := context.WithoutCancel(ctx)
+		if err := h.app.Executor.Execute(bg, depID); err != nil {
+			logger.ErrorContext(bg, "async deploy failed",
+				slog.String("deploymentId", depID.String()),
+				slog.String("error", err.Error()))
+		}
+	}()
 }
 
 // Status handles GET /api/v1/deployments/{id}.

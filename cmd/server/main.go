@@ -15,7 +15,9 @@ import (
 
 	httpadapter "github.com/myorg/platform-orchestrator/internal/adapter/inbound/http"
 	"github.com/myorg/platform-orchestrator/internal/adapter/inbound/http/handler"
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/argocd"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/entra"
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/oci"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/persistence"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
@@ -44,6 +46,17 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Secret fields carry yaml:"-" so they never serialize into the config file;
+	// populate them from the environment after Load (ArgoCD API token, DocumentDB
+	// connection string). ACR push/pull is secretless via workload identity, so
+	// no registry credential is read here.
+	if v := os.Getenv("DOCUMENTDB_CONNECTION_STRING"); v != "" {
+		cfg.DocDB.ConnectionString = v
+	}
+	if v := os.Getenv("ARGOCD_TOKEN"); v != "" {
+		cfg.ArgoCD.Token = v
+	}
+
 	logger := telemetry.NewLogger(cfg.OTel.ServiceName + "-server")
 
 	tp, err := telemetry.Init(ctx, cfg.OTel)
@@ -66,6 +79,29 @@ func run() error {
 
 	deploymentsColl := mongoClient.Database(cfg.DocDB.Database).Collection(cfg.DocDB.DeploymentsCollection)
 	deploymentRepo := persistence.NewDeploymentRepository(deploymentsColl, logger)
+
+	// Outbound adapters for the deploy pipeline (ADR-0016 in-process executor).
+	// The resolver pulls the base umbrella from GHCR anonymously; the publisher
+	// pushes the composed chart to ACR, which ArgoCD pulls via workload identity
+	// (secretless — ADR-0021 §3). The only long-lived credential is the ArgoCD
+	// API token, read from env above.
+	chartResolver, err := oci.NewResolver(logger)
+	if err != nil {
+		return fmt.Errorf("build chart resolver: %w", err)
+	}
+	chartComposer := oci.NewComposer(logger)
+	artifactPublisher := oci.NewPublisher(cfg.OCI.Registry, cfg.OCI.RepositoryPrefix, logger)
+	argoClient := argocd.NewClient(cfg.ArgoCD.ServerURL, cfg.ArgoCD.Token, logger)
+
+	executor := deploymentapp.NewDeployExecutionHandler(
+		deploymentRepo, chartResolver, chartComposer, artifactPublisher, argoClient,
+		deploymentapp.ExecutionConfig{
+			PollInterval:       time.Duration(cfg.Deploy.PollIntervalSeconds) * time.Second,
+			ConvergenceTimeout: time.Duration(cfg.Deploy.HealthConvergenceTimeoutSeconds) * time.Second,
+			ArgoAppNamespace:   cfg.ArgoCD.AppNamespace,
+		},
+		logger,
+	)
 
 	// J3 tunable allowlist (governance, server-side — ADR-0006). Loaded from the
 	// policies config; reject overrides of platform-locked knobs at the API
@@ -91,6 +127,7 @@ func run() error {
 		Queries: deploymentapp.Queries{
 			GetDeployment: deploymentapp.NewGetDeploymentHandler(deploymentRepo),
 		},
+		Executor: executor,
 	}
 
 	// OIDC token validator (ADR-0015). Built from the configured issuer/audience;
