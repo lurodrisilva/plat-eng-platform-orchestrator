@@ -33,6 +33,13 @@ spec:
               value: /etc/config/config.yaml
             - name: POLICIES_CONFIG_PATH
               value: /etc/policies/default.yaml
+            # helm's OCI registry client writes its credentials file under
+            # $HOME/.config (or $XDG_CONFIG_HOME) during Login; the root FS is
+            # read-only, so point HOME at the writable /tmp emptyDir.
+            - name: HOME
+              value: /tmp
+            - name: XDG_CONFIG_HOME
+              value: /tmp/.config
             - name: OTEL_SERVICE_NAME
               value: platform-orchestrator-server
             # In-cluster ArgoCD lives in devops-system and runs secure with a
