@@ -3,6 +3,7 @@ package argocd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,14 +22,33 @@ type Client struct {
 	logger     *slog.Logger
 }
 
+// Option configures a Client.
+type Option func(*Client)
+
+// WithInsecureTLS skips TLS verification. In-cluster argocd-server runs in
+// secure mode with a self-signed certificate, so a same-cluster client that
+// reaches it over https://argocd-server.<ns>.svc must skip verification (the
+// hop stays inside the cluster network). Do not use across trust boundaries.
+func WithInsecureTLS() Option {
+	return func(c *Client) {
+		c.httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // in-cluster self-signed argocd
+		}
+	}
+}
+
 // NewClient creates an Argo CD API client.
-func NewClient(serverURL, token string, logger *slog.Logger) *Client {
-	return &Client{
+func NewClient(serverURL, token string, logger *slog.Logger, opts ...Option) *Client {
+	c := &Client{
 		serverURL:  serverURL,
 		token:      token,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		logger:     logger,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 func (c *Client) ValidateProject(ctx context.Context, project, sourceRepo, destServer, destNS string) error {

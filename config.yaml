@@ -21,7 +21,9 @@ argocd:
   serverURL: "${ARGOCD_SERVER_URL:-https://argocd.example.com}"
   # Namespace the ArgoCD Application objects are created in (in-cluster ArgoCD).
   appNamespace: "${ARGOCD_APP_NAMESPACE:-argocd}"
-  insecure: false
+  # In-cluster argocd-server is secure with a self-signed cert; a same-cluster
+  # client sets this true. Hardening follow-up: trust the argocd CA instead.
+  insecure: ${ARGOCD_INSECURE:-false}
 
 oci:
   # Composed charts are published to ACR, pulled by ArgoCD via workload identity

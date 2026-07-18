@@ -16,11 +16,15 @@ spec:
       labels:
         app: platform-orchestrator
         component: server
+        # Opt this pod into the Azure workload-identity webhook: it projects the
+        # federated token + injects AZURE_CLIENT_ID/TENANT_ID/FEDERATED_TOKEN_FILE
+        # so azidentity can push to ACR (gate 3) with no stored credential.
+        azure.workload.identity/use: "true"
     spec:
       serviceAccountName: platform-orchestrator
       containers:
         - name: server
-          image: myregistry.azurecr.io/platform-orchestrator-server:latest
+          image: acrdevbf6cc837.azurecr.io/platform-orchestrator-server:phase-g
           ports:
             - name: http
               containerPort: 8080
@@ -29,7 +33,23 @@ spec:
               value: /etc/config/config.yaml
             - name: OTEL_SERVICE_NAME
               value: platform-orchestrator-server
+            # In-cluster ArgoCD lives in devops-system and runs secure with a
+            # self-signed cert; reach it over the cluster network and skip TLS
+            # verification (hardening follow-up: trust the argocd CA).
+            - name: ARGOCD_SERVER_URL
+              value: https://argocd-server.devops-system.svc
+            - name: ARGOCD_APP_NAMESPACE
+              value: devops-system
+            - name: ARGOCD_INSECURE
+              value: "true"
+            # Publish composed charts to the platform ACR (gate 3 WI push).
+            - name: OCI_REGISTRY
+              value: acrdevbf6cc837.azurecr.io
           envFrom:
+            # DOCUMENTDB_CONNECTION_STRING (private DocumentDB) + ARGOCD_TOKEN.
+            # Bootstrapped from the ESO Key Vault + a minted ArgoCD token at
+            # deploy; the secretless target is externalsecret.yaml once the ESO
+            # ClusterSecretStore is fixed.
             - secretRef:
                 name: platform-orchestrator-secrets
           volumeMounts:

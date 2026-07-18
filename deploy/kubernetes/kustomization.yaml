@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# On-cluster deploy of the platform orchestrator (Phase G).
+#
+# The two ConfigMaps and the Secret this Deployment mounts are created at deploy
+# time, not here, so they stay DRY and secretless:
+#   - platform-orchestrator-config   ← kubectl create cm --from-file=../../config.yaml
+#   - platform-orchestrator-policies ← kubectl create cm --from-file=../../policies/default.yaml
+#   - platform-orchestrator-secrets  ← DOCUMENTDB_CONNECTION_STRING (from the ESO
+#       Key Vault) + ARGOCD_TOKEN (minted from argocd). externalsecret.yaml is the
+#       secretless target once the ESO ClusterSecretStore is fixed.
+namespace: platform-orchestrator
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - server.yaml

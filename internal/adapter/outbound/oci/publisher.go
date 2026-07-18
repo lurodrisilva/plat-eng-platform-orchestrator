@@ -14,22 +14,49 @@ import (
 type Publisher struct {
 	registryHost     string
 	repositoryPrefix string
+	credential       CredentialFunc // optional; nil = anonymous (no login)
 	logger           *slog.Logger
 }
 
+// Option configures a Publisher.
+type Option func(*Publisher)
+
+// WithCredential makes the publisher log in to the registry before each push
+// using the supplied credential source (e.g. ACR workload identity). Without it
+// the publisher pushes anonymously (public registries, tests).
+func WithCredential(c CredentialFunc) Option {
+	return func(p *Publisher) { p.credential = c }
+}
+
 // NewPublisher creates an OCI artifact publisher.
-func NewPublisher(registryHost, repoPrefix string, logger *slog.Logger) *Publisher {
-	return &Publisher{
+func NewPublisher(registryHost, repoPrefix string, logger *slog.Logger, opts ...Option) *Publisher {
+	p := &Publisher{
 		registryHost:     registryHost,
 		repositoryPrefix: repoPrefix,
 		logger:           logger,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 func (p *Publisher) Publish(ctx context.Context, chartBytes []byte, appID, chartName, version string) (port.PublishedArtifact, error) {
 	client, err := registry.NewClient()
 	if err != nil {
 		return port.PublishedArtifact{}, fmt.Errorf("create registry client: %w", err)
+	}
+
+	// Log in when a credential source is configured (secretless ACR push via
+	// workload identity — ADR-0021 gate 3). Anonymous otherwise.
+	if p.credential != nil {
+		user, pass, err := p.credential(ctx)
+		if err != nil {
+			return port.PublishedArtifact{}, fmt.Errorf("acquire registry credential: %w", err)
+		}
+		if err := client.Login(p.registryHost, registry.LoginOptBasicAuth(user, pass)); err != nil {
+			return port.PublishedArtifact{}, fmt.Errorf("registry login to %s: %w", p.registryHost, err)
+		}
 	}
 
 	ref := p.buildRef(appID, chartName, version)

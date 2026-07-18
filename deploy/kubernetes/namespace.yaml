@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-orchestrator
+  labels:
+    app: platform-orchestrator
+    # Enable the Azure workload-identity mutating webhook for pods here (belt-
+    # and-braces; the pod also carries azure.workload.identity/use: "true").
+    azure.workload.identity/use: "true"

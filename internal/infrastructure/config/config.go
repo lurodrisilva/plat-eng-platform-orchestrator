@@ -43,6 +43,10 @@ type ArgoCD struct {
 	Token     string `yaml:"-"`
 	// AppNamespace is the namespace the ArgoCD Application objects live in.
 	AppNamespace string `yaml:"appNamespace"`
+	// Insecure skips TLS verification when reaching argocd-server. In-cluster
+	// argocd-server runs secure with a self-signed cert; a same-cluster client
+	// sets this true. Hardening follow-up: trust the argocd CA instead.
+	Insecure bool `yaml:"insecure"`
 }
 
 type OCI struct {
