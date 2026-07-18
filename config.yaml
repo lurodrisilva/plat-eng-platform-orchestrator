@@ -50,10 +50,12 @@ otel:
   insecure: true
 
 policies:
-  configPath: "policies/default.yaml"
+  configPath: "${POLICIES_CONFIG_PATH:-policies/default.yaml}"
 
 deploymentDefaults:
-  syncTimeoutSeconds: 600
-  healthConvergenceTimeoutSeconds: 300
-  workflowTimeoutMinutes: 20
-  pollIntervalSeconds: 10
+  syncTimeoutSeconds: ${SYNC_TIMEOUT_SECONDS:-600}
+  # A Crossplane-provisioned Azure Flexible Server takes ~5-10 min; the executor
+  # polls the ArgoCD app until it converges, so allow enough headroom.
+  healthConvergenceTimeoutSeconds: ${HEALTH_CONVERGENCE_TIMEOUT_SECONDS:-300}
+  workflowTimeoutMinutes: ${WORKFLOW_TIMEOUT_MINUTES:-20}
+  pollIntervalSeconds: ${POLL_INTERVAL_SECONDS:-10}

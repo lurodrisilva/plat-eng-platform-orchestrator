@@ -322,9 +322,12 @@ func (h *DeployExecutionHandler) pollHealth(ctx context.Context, d *deployment.D
 		switch st.HealthStatus {
 		case "Healthy":
 			return true, nil
-		case "Degraded", "Missing":
+		case "Degraded":
 			return false, nil
 		}
+		// "Missing"/"Progressing"/"" are transient while sync-waves roll and a
+		// Crossplane-provisioned resource (e.g. an Azure Flexible Server, ~5-10m)
+		// converges — keep polling until the deadline rather than degrading early.
 		if time.Now().After(deadline) {
 			return false, nil // timed out short of convergence → treat as degraded
 		}

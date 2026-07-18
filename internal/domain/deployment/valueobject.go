@@ -13,7 +13,16 @@ type DeploymentID string
 // NewDeploymentID creates a deterministic deployment ID from its components.
 func NewDeploymentID(appID, environment, shortSHA string, ts time.Time) DeploymentID {
 	return DeploymentID(fmt.Sprintf("dep-%s-%s-%s-%s",
-		ts.UTC().Format("20060102"), appID, environment[:4], shortSHA))
+		ts.UTC().Format("20060102"), appID, envSlug(environment), shortSHA))
+}
+
+// envSlug takes the first up to 4 characters of the environment for the ID,
+// guarding against short names (e.g. "dev") that would panic on environment[:4].
+func envSlug(environment string) string {
+	if len(environment) > 4 {
+		return environment[:4]
+	}
+	return environment
 }
 
 func (id DeploymentID) String() string { return string(id) }
@@ -145,21 +154,21 @@ func NewSource(gitSHA, gitRef, githubRunID string, runAttempt int, workflow, act
 	}, nil
 }
 
-func (s Source) GitSHA() string        { return s.gitSHA }
-func (s Source) ShortSHA() string      { return s.gitSHA[:7] }
-func (s Source) GitRef() string        { return s.gitRef }
-func (s Source) GitHubRunID() string   { return s.githubRunID }
-func (s Source) GitHubRunAttempt() int { return s.githubRunAttempt }
-func (s Source) WorkflowName() string  { return s.workflowName }
-func (s Source) Actor() string         { return s.actor }
+func (s Source) GitSHA() string         { return s.gitSHA }
+func (s Source) ShortSHA() string       { return s.gitSHA[:7] }
+func (s Source) GitRef() string         { return s.gitRef }
+func (s Source) GitHubRunID() string    { return s.githubRunID }
+func (s Source) GitHubRunAttempt() int  { return s.githubRunAttempt }
+func (s Source) WorkflowName() string   { return s.workflowName }
+func (s Source) Actor() string          { return s.actor }
 func (s Source) RepositoryFull() string { return s.repositoryFull }
 
 // ChartSource describes where to find the Helm chart.
 type ChartSource struct {
-	repository      string
-	name            string
+	repository        string
+	name              string
 	versionConstraint string
-	allowPrerelease bool
+	allowPrerelease   bool
 }
 
 // NewChartSource creates a validated ChartSource.
@@ -178,7 +187,7 @@ func NewChartSource(repository, name, constraint string, allowPrerelease bool) (
 	}, nil
 }
 
-func (c ChartSource) Repository() string      { return c.repository }
-func (c ChartSource) Name() string             { return c.name }
+func (c ChartSource) Repository() string        { return c.repository }
+func (c ChartSource) Name() string              { return c.name }
 func (c ChartSource) VersionConstraint() string { return c.versionConstraint }
 func (c ChartSource) AllowPrerelease() bool     { return c.allowPrerelease }

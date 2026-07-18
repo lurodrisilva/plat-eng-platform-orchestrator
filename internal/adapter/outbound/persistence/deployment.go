@@ -26,31 +26,37 @@ func NewDeploymentRepository(collection *mongo.Collection, logger *slog.Logger) 
 
 // deploymentDoc is the persistence representation (private to adapter).
 type deploymentDoc struct {
-	ID            string    `bson:"_id"`
-	ApplicationID string    `bson:"applicationId"`
-	Team          string    `bson:"team"`
-	Status        string    `bson:"status"`
-	Environment   string    `bson:"environment"`
-	Cluster       string    `bson:"cluster"`
-	Namespace     string    `bson:"namespace"`
-	AppProject    string    `bson:"appProject"`
-	ImageRepo     string    `bson:"imageRepo"`
-	ImageTag      string    `bson:"imageTag"`
-	ImageDigest   string    `bson:"imageDigest"`
-	ChartRepo     string    `bson:"chartRepo"`
-	ChartName     string    `bson:"chartName"`
-	GitSHA        string    `bson:"gitSha"`
-	GitRef        string    `bson:"gitRef"`
-	RunID         string    `bson:"githubRunId"`
-	RunAttempt    int       `bson:"githubRunAttempt"`
-	Workflow      string    `bson:"workflowName"`
-	Actor         string    `bson:"actor"`
-	RepoFull      string    `bson:"repositoryFull"`
-	CorrelationID string    `bson:"correlationId"`
-	ErrMsg        string    `bson:"error,omitempty"`
-	StartedAt     time.Time `bson:"startedAt"`
-	CompletedAt   time.Time `bson:"completedAt,omitempty"`
-	UpdatedAt     time.Time `bson:"updatedAt"`
+	ID              string         `bson:"_id"`
+	ApplicationID   string         `bson:"applicationId"`
+	Team            string         `bson:"team"`
+	Status          string         `bson:"status"`
+	Environment     string         `bson:"environment"`
+	Cluster         string         `bson:"cluster"`
+	Namespace       string         `bson:"namespace"`
+	AppProject      string         `bson:"appProject"`
+	ImageRepo       string         `bson:"imageRepo"`
+	ImageTag        string         `bson:"imageTag"`
+	ImageDigest     string         `bson:"imageDigest"`
+	ChartRepo       string         `bson:"chartRepo"`
+	ChartName       string         `bson:"chartName"`
+	ChartConstraint string         `bson:"chartConstraint,omitempty"`
+	ChartAllowPre   bool           `bson:"chartAllowPrerelease,omitempty"`
+	Values          map[string]any `bson:"values,omitempty"`
+	GitSHA          string         `bson:"gitSha"`
+	GitRef          string         `bson:"gitRef"`
+	RunID           string         `bson:"githubRunId"`
+	RunAttempt      int            `bson:"githubRunAttempt"`
+	Workflow        string         `bson:"workflowName"`
+	Actor           string         `bson:"actor"`
+	RepoFull        string         `bson:"repositoryFull"`
+	CorrelationID   string         `bson:"correlationId"`
+	// No omitempty: the upsert $set must be able to CLEAR a prior error when a
+	// re-driven deployment succeeds; omitempty would drop the empty value and
+	// leave a stale error on a now-COMPLETED record.
+	ErrMsg      string    `bson:"error"`
+	StartedAt   time.Time `bson:"startedAt"`
+	CompletedAt time.Time `bson:"completedAt,omitempty"`
+	UpdatedAt   time.Time `bson:"updatedAt"`
 
 	// Pipeline outputs — populated as the deployment advances (ADR-0016).
 	Metadata *metadataDoc `bson:"metadata,omitempty"`
@@ -149,31 +155,34 @@ func (r *DeploymentRepository) FindByApplication(ctx context.Context, appID, env
 
 func toDoc(d *deployment.Deployment) deploymentDoc {
 	doc := deploymentDoc{
-		ID:            d.ID().String(),
-		ApplicationID: d.ApplicationID(),
-		Team:          d.Team(),
-		Status:        d.Status().String(),
-		Environment:   d.Target().Environment(),
-		Cluster:       d.Target().Cluster(),
-		Namespace:     d.Target().Namespace(),
-		AppProject:    d.Target().AppProject(),
-		ImageRepo:     d.Image().Repository(),
-		ImageTag:      d.Image().Tag(),
-		ImageDigest:   d.Image().Digest(),
-		ChartRepo:     d.ChartSource().Repository(),
-		ChartName:     d.ChartSource().Name(),
-		GitSHA:        d.Source().GitSHA(),
-		GitRef:        d.Source().GitRef(),
-		RunID:         d.Source().GitHubRunID(),
-		RunAttempt:    d.Source().GitHubRunAttempt(),
-		Workflow:      d.Source().WorkflowName(),
-		Actor:         d.Source().Actor(),
-		RepoFull:      d.Source().RepositoryFull(),
-		CorrelationID: d.CorrelationID(),
-		ErrMsg:        d.Error(),
-		StartedAt:     d.StartedAt(),
-		CompletedAt:   d.CompletedAt(),
-		UpdatedAt:     d.UpdatedAt(),
+		ID:              d.ID().String(),
+		ApplicationID:   d.ApplicationID(),
+		Team:            d.Team(),
+		Status:          d.Status().String(),
+		Environment:     d.Target().Environment(),
+		Cluster:         d.Target().Cluster(),
+		Namespace:       d.Target().Namespace(),
+		AppProject:      d.Target().AppProject(),
+		ImageRepo:       d.Image().Repository(),
+		ImageTag:        d.Image().Tag(),
+		ImageDigest:     d.Image().Digest(),
+		ChartRepo:       d.ChartSource().Repository(),
+		ChartName:       d.ChartSource().Name(),
+		ChartConstraint: d.ChartSource().VersionConstraint(),
+		ChartAllowPre:   d.ChartSource().AllowPrerelease(),
+		Values:          d.Values(),
+		GitSHA:          d.Source().GitSHA(),
+		GitRef:          d.Source().GitRef(),
+		RunID:           d.Source().GitHubRunID(),
+		RunAttempt:      d.Source().GitHubRunAttempt(),
+		Workflow:        d.Source().WorkflowName(),
+		Actor:           d.Source().Actor(),
+		RepoFull:        d.Source().RepositoryFull(),
+		CorrelationID:   d.CorrelationID(),
+		ErrMsg:          d.Error(),
+		StartedAt:       d.StartedAt(),
+		CompletedAt:     d.CompletedAt(),
+		UpdatedAt:       d.UpdatedAt(),
 	}
 
 	if m := d.Metadata(); m != nil {
@@ -213,7 +222,7 @@ func fromDoc(doc deploymentDoc) (*deployment.Deployment, error) {
 		return nil, fmt.Errorf("reconstitute image: %w", err)
 	}
 
-	chart, err := deployment.NewChartSource(doc.ChartRepo, doc.ChartName, "", false)
+	chart, err := deployment.NewChartSource(doc.ChartRepo, doc.ChartName, doc.ChartConstraint, doc.ChartAllowPre)
 	if err != nil {
 		return nil, fmt.Errorf("reconstitute chart source: %w", err)
 	}
@@ -260,7 +269,7 @@ func fromDoc(doc deploymentDoc) (*deployment.Deployment, error) {
 		deployment.DeploymentID(doc.ID),
 		doc.ApplicationID, doc.Team,
 		image, chart, target, source,
-		nil, doc.CorrelationID,
+		doc.Values, doc.CorrelationID,
 		status,
 		metadata, artifact, argoApp, health,
 		doc.ErrMsg,
