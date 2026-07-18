@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -90,8 +91,19 @@ func run() error {
 		return fmt.Errorf("build chart resolver: %w", err)
 	}
 	chartComposer := oci.NewComposer(logger)
-	artifactPublisher := oci.NewPublisher(cfg.OCI.Registry, cfg.OCI.RepositoryPrefix, logger)
-	argoClient := argocd.NewClient(cfg.ArgoCD.ServerURL, cfg.ArgoCD.Token, logger)
+	// Push to ACR with workload identity (secretless — ADR-0021 gate 3) when the
+	// target is an Azure Container Registry; anonymous otherwise (public registries).
+	var publisherOpts []oci.Option
+	if strings.HasSuffix(cfg.OCI.Registry, ".azurecr.io") {
+		publisherOpts = append(publisherOpts, oci.WithCredential(oci.ACRWorkloadIdentityCredential(cfg.OCI.Registry)))
+		logger.Info("ACR workload-identity push enabled", slog.String("registry", cfg.OCI.Registry))
+	}
+	artifactPublisher := oci.NewPublisher(cfg.OCI.Registry, cfg.OCI.RepositoryPrefix, logger, publisherOpts...)
+	var argoOpts []argocd.Option
+	if cfg.ArgoCD.Insecure {
+		argoOpts = append(argoOpts, argocd.WithInsecureTLS())
+	}
+	argoClient := argocd.NewClient(cfg.ArgoCD.ServerURL, cfg.ArgoCD.Token, logger, argoOpts...)
 
 	executor := deploymentapp.NewDeployExecutionHandler(
 		deploymentRepo, chartResolver, chartComposer, artifactPublisher, argoClient,

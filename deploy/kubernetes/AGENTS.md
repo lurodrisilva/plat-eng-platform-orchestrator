@@ -9,11 +9,17 @@ Raw Kubernetes manifests for the server binary. The Deployment uses `serviceAcco
 ## Key Files
 | File | Description |
 |------|-------------|
-| `server.yaml` | `Deployment platform-orchestrator-server` (2 replicas, port 8080, liveness `/healthz`, readiness `/readyz`, 250m/256Mi → 500m/512Mi) + `Service` (ClusterIP, port 8080) |
+| `namespace.yaml` | `Namespace platform-orchestrator`, labelled `azure.workload.identity/use: "true"` |
+| `serviceaccount.yaml` | `ServiceAccount platform-orchestrator`, annotated `azure.workload.identity/client-id` = gate-3 AcrPush UAMI (ADR-0021 §3) |
+| `server.yaml` | `Deployment platform-orchestrator-server` (2 replicas, port 8080, liveness `/healthz`, readiness `/readyz`, 250m/256Mi → 500m/512Mi; WI pod label; ACR image; ArgoCD/OCI env) + `Service` (ClusterIP, port 8080) |
+| `externalsecret.yaml` | Secretless target: ESO syncs `DOCUMENTDB_CONNECTION_STRING` from the Key Vault into `platform-orchestrator-secrets`. Not yet applied — the cluster's `azure-keyvault` ClusterSecretStore is `InvalidProviderConfig`; the Secret is bootstrapped at deploy until that store is fixed. |
+| `kustomization.yaml` | Aggregates namespace + SA + server. ConfigMaps (`config`/`policies`) and the Secret are created at deploy (DRY + secretless), not generated here. |
 
 ## For AI Agents
 
 ### Working In This Directory
+- Push to ACR is secretless via gate-3 workload identity: the pod carries `azure.workload.identity/use: "true"` and the SA is annotated with the UAMI client-id; the webhook injects `AZURE_*` for azidentity. Rotating the identity = re-annotate the SA with the new `acr_orchestrator_push_client_id`.
+- ArgoCD lives in `devops-system` (not `argocd`): `ARGOCD_APP_NAMESPACE=devops-system`, `ARGOCD_SERVER_URL=https://argocd-server.devops-system.svc`, `ARGOCD_INSECURE=true` (self-signed in-cluster cert; hardening follow-up: trust the argocd CA).
 - `image: ...:latest` — replace with immutable tag (sha or version) before production rollout.
 - `readOnlyRootFilesystem: true` requires writable tmpfs — if the server starts needing scratch space, add an `emptyDir` volume at `/tmp`.
 - ConfigMap `platform-orchestrator-config` must contain `config.yaml` (mirrors repo's `config.yaml`); ConfigMap `platform-orchestrator-policies` must contain `default.yaml`.
