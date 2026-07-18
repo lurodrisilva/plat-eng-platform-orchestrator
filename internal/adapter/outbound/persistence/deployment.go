@@ -50,10 +50,13 @@ type deploymentDoc struct {
 	Actor           string         `bson:"actor"`
 	RepoFull        string         `bson:"repositoryFull"`
 	CorrelationID   string         `bson:"correlationId"`
-	ErrMsg          string         `bson:"error,omitempty"`
-	StartedAt       time.Time      `bson:"startedAt"`
-	CompletedAt     time.Time      `bson:"completedAt,omitempty"`
-	UpdatedAt       time.Time      `bson:"updatedAt"`
+	// No omitempty: the upsert $set must be able to CLEAR a prior error when a
+	// re-driven deployment succeeds; omitempty would drop the empty value and
+	// leave a stale error on a now-COMPLETED record.
+	ErrMsg      string    `bson:"error"`
+	StartedAt   time.Time `bson:"startedAt"`
+	CompletedAt time.Time `bson:"completedAt,omitempty"`
+	UpdatedAt   time.Time `bson:"updatedAt"`
 
 	// Pipeline outputs — populated as the deployment advances (ADR-0016).
 	Metadata *metadataDoc `bson:"metadata,omitempty"`
