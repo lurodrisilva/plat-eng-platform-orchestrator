@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/myorg/platform-orchestrator/internal/application/port"
@@ -144,7 +145,18 @@ func (c *Client) Sync(ctx context.Context, appName string) error {
 	url := fmt.Sprintf("%s/api/v1/applications/%s/sync", c.serverURL, appName)
 	payload, _ := json.Marshal(map[string]any{"prune": true})
 	_, err := c.doRequest(ctx, http.MethodPost, url, payload)
-	return err
+	if err != nil {
+		// The app's automated syncPolicy may already be syncing it — that is
+		// exactly the state this call wants, so an in-progress operation is
+		// success, not failure. Makes Sync idempotent against a re-drive.
+		if strings.Contains(err.Error(), "another operation is already in progress") {
+			c.logger.InfoContext(ctx, "argo sync already in progress; treating as synced",
+				slog.String("app", appName))
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) Status(ctx context.Context, appName string) (port.ArgoAppStatus, error) {
