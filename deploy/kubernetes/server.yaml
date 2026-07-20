@@ -54,6 +54,34 @@ spec:
             # Publish composed charts to the platform ACR (gate 3 WI push).
             - name: OCI_REGISTRY
               value: acrdevbf6cc837.azurecr.io
+            # GitHub App for the Phase F scaffold-new-app dispatch (ADR-0009).
+            # AppID/InstallationID and the PEM private key come from the
+            # platform-orchestrator-secrets Secret (bootstrapped manually until
+            # the ESO store is fixed — see externalsecret.yaml). The scaffolder
+            # is built only when GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY are set.
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: platform-orchestrator-secrets
+                  key: github-app-id
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: platform-orchestrator-secrets
+                  key: github-app-installation-id
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: platform-orchestrator-secrets
+                  key: github-app-private-key
+            # The scaffolder repo hosting the workflow, and the org the new app
+            # repos land under. Literal (non-secret).
+            - name: SCAFFOLDER_OWNER
+              value: lurodrisilva
+            - name: SCAFFOLDER_REPO
+              value: net-hexagonal
+            - name: NEW_REPO_OWNER
+              value: lurodrisilva
           envFrom:
             # DOCUMENTDB_CONNECTION_STRING (private DocumentDB) + ARGOCD_TOKEN.
             # Bootstrapped from the ESO Key Vault + a minted ArgoCD token at

@@ -18,6 +18,7 @@ import (
 	"github.com/myorg/platform-orchestrator/internal/adapter/inbound/http/handler"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/argocd"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/entra"
+	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/github"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/oci"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/persistence"
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
@@ -56,6 +57,12 @@ func run() error {
 	}
 	if v := os.Getenv("ARGOCD_TOKEN"); v != "" {
 		cfg.ArgoCD.Token = v
+	}
+	// GitHub App private key for the scaffold-new-app dispatch (Phase F). PEM,
+	// yaml:"-" so it never lands in the config file; the scaffolder is built only
+	// when this and the App ID are present.
+	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
+		cfg.GitHub.PrivateKey = v
 	}
 
 	logger := telemetry.NewLogger(cfg.OTel.ServiceName + "-server")
@@ -155,9 +162,38 @@ func run() error {
 		slog.String("issuer", cfg.Auth.OIDC.Issuer),
 		slog.String("audience", cfg.Auth.OIDC.Audience))
 
+	// GitHub App scaffolder (Phase F, ADR-0009). Optional: built only when a
+	// GitHub App is configured (AppID + private key). The orchestrator's only
+	// GitHub responsibility is to mint an installation token, fire the
+	// scaffold-new-app workflow_dispatch, and read repo existence — the actual
+	// render+push runs in the workflow, not here. Nil when unconfigured, which
+	// makes POST /api/v1/apps answer 503.
+	var appsScaffolder port.Scaffolder
+	if cfg.GitHub.AppID != 0 && cfg.GitHub.PrivateKey != "" {
+		sc, err := github.NewScaffolder(github.ScaffolderConfig{
+			AppID:           cfg.GitHub.AppID,
+			InstallationID:  cfg.GitHub.InstallationID,
+			PrivateKeyPEM:   cfg.GitHub.PrivateKey,
+			ScaffolderOwner: cfg.GitHub.ScaffolderOwner,
+			ScaffolderRepo:  cfg.GitHub.ScaffolderRepo,
+			WorkflowFile:    cfg.GitHub.WorkflowFile,
+			Ref:             cfg.GitHub.WorkflowRef,
+			NewRepoOwner:    cfg.GitHub.NewRepoOwner,
+		}, logger)
+		if err != nil {
+			return fmt.Errorf("build scaffolder: %w", err)
+		}
+		appsScaffolder = sc
+		logger.Info("github scaffolder enabled",
+			slog.String("scaffolderRepo", cfg.GitHub.ScaffolderOwner+"/"+cfg.GitHub.ScaffolderRepo),
+			slog.String("workflow", cfg.GitHub.WorkflowFile),
+			slog.String("newRepoOwner", cfg.GitHub.NewRepoOwner))
+	}
+
 	// HTTP handler + router
 	deploymentHandler := handler.NewDeployment(app, validator, allowlist, logger)
-	router := httpadapter.NewRouter(deploymentHandler, logger)
+	appsHandler := handler.NewApps(appsScaffolder, validator, logger)
+	router := httpadapter.NewRouter(deploymentHandler, appsHandler, logger)
 
 	srv := &http.Server{
 		Addr:         cfg.Server.Addr,

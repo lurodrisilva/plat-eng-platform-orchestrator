@@ -9,7 +9,7 @@ import (
 )
 
 // NewRouter creates the HTTP router with all routes and middleware.
-func NewRouter(deployment *handler.Deployment, logger *slog.Logger) http.Handler {
+func NewRouter(deployment *handler.Deployment, apps *handler.Apps, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	health := &handler.Health{}
@@ -20,6 +20,9 @@ func NewRouter(deployment *handler.Deployment, logger *slog.Logger) http.Handler
 	mux.HandleFunc("POST /api/v1/deployments:validate", deployment.ValidateTunables)
 	mux.HandleFunc("GET /api/v1/deployments/{id}", deployment.Status)
 	mux.HandleFunc("POST /api/v1/deployments/{id}/deploy", deployment.Redeploy)
+
+	mux.HandleFunc("POST /api/v1/apps", apps.Create)
+	mux.HandleFunc("GET /api/v1/apps/{name}", apps.Status)
 
 	var h http.Handler = mux
 	h = middleware.Tracing(h)

@@ -76,6 +76,18 @@ type OCI struct {
 
 type GitHub struct {
 	Token string `yaml:"-"`
+	// GitHub App for the scaffold-new-app dispatch (Phase F). Optional: when
+	// AppID/PrivateKey are unset the scaffolder is nil and POST /api/v1/apps
+	// answers 503. AppID/InstallationID come from the config file; PrivateKey is
+	// a secret populated from env in cmd/server/main.go.
+	AppID           int64  `yaml:"appId"`
+	InstallationID  int64  `yaml:"installationId"`
+	PrivateKey      string `yaml:"-"` // populated from env
+	ScaffolderOwner string `yaml:"scaffolderOwner"`
+	ScaffolderRepo  string `yaml:"scaffolderRepo"`
+	WorkflowFile    string `yaml:"workflowFile"`
+	WorkflowRef     string `yaml:"workflowRef"`
+	NewRepoOwner    string `yaml:"newRepoOwner"`
 }
 
 type DocDB struct {
@@ -160,6 +172,14 @@ func applyDefaults(c *Config) {
 	}
 	if c.DocDB.DeploymentsCollection == "" {
 		c.DocDB.DeploymentsCollection = "deployments"
+	}
+	if c.GitHub.WorkflowRef == "" {
+		// net-hexagonal (the scaffolder repo) defaults to master; the workflow
+		// file is dispatched from that ref.
+		c.GitHub.WorkflowRef = "master"
+	}
+	if c.GitHub.WorkflowFile == "" {
+		c.GitHub.WorkflowFile = "scaffold-new-app.yml"
 	}
 }
 
