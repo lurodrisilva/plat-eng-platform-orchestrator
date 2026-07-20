@@ -33,9 +33,18 @@ oci:
   repositoryPrefix: ""
 
 github:
-  appID: 0
-  installationID: 0
-  token: "${GITHUB_TOKEN}"
+  # GitHub App for the Phase F scaffold-new-app dispatch (ADR-0009). The
+  # orchestrator only mints an installation token, fires workflow_dispatch, and
+  # reads repo existence — the render+push runs in the workflow. AppID/PrivateKey
+  # unset → scaffolder is nil and POST /api/v1/apps answers 503. The private key
+  # (GITHUB_APP_PRIVATE_KEY) is a secret, injected from env, never in this file.
+  appId: ${GITHUB_APP_ID:-0}
+  installationId: ${GITHUB_APP_INSTALLATION_ID:-0}
+  scaffolderOwner: ${SCAFFOLDER_OWNER:-lurodrisilva}
+  scaffolderRepo: ${SCAFFOLDER_REPO:-net-hexagonal}
+  workflowFile: ${SCAFFOLDER_WORKFLOW:-scaffold-new-app.yml}
+  workflowRef: ${SCAFFOLDER_WORKFLOW_REF:-master}
+  newRepoOwner: ${NEW_REPO_OWNER:-lurodrisilva}
 
 documentdb:
   endpoint: "${DOCUMENTDB_ENDPOINT}"
