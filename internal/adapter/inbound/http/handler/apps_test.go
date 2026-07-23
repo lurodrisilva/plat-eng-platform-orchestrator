@@ -80,8 +80,9 @@ func TestApps_Create_HappyPath_Returns202(t *testing.T) {
 	fake := &fakeScaffolder{
 		dispatchResult: port.ScaffoldResult{
 			AppName:    "my-app",
-			Repository: "lurodrisilva/my-app",
-			RepoURL:    "https://github.com/lurodrisilva/my-app",
+			RepoName:   "my-app-t3st",
+			Repository: "lurodrisilva/my-app-t3st",
+			RepoURL:    "https://github.com/lurodrisilva/my-app-t3st",
 		},
 	}
 	h := NewApps(fake, stubValidator{claims: port.OIDCClaims{ObjectID: "obj-1"}}, discardLogger())
@@ -94,11 +95,15 @@ func TestApps_Create_HappyPath_Returns202(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp["repository"] != "lurodrisilva/my-app" {
-		t.Errorf("repository = %q, want lurodrisilva/my-app", resp["repository"])
+	if resp["repository"] != "lurodrisilva/my-app-t3st" {
+		t.Errorf("repository = %q, want lurodrisilva/my-app-t3st", resp["repository"])
 	}
-	if resp["statusUrl"] != "/api/v1/apps/my-app" {
-		t.Errorf("statusUrl = %q, want /api/v1/apps/my-app", resp["statusUrl"])
+	// Poll URL must target the suffixed repo name, not the clean app name.
+	if resp["statusUrl"] != "/api/v1/apps/my-app-t3st" {
+		t.Errorf("statusUrl = %q, want /api/v1/apps/my-app-t3st", resp["statusUrl"])
+	}
+	if resp["appName"] != "my-app" {
+		t.Errorf("appName = %q, want my-app (clean identity)", resp["appName"])
 	}
 	// Domain defaults to "account" when omitted; the actor is the principal.
 	if fake.gotReq.Domain != "account" {

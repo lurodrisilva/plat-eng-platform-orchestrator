@@ -3,12 +3,15 @@ package github
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/myorg/platform-orchestrator/internal/application/port"
@@ -18,6 +21,23 @@ import (
 // DNS-label-ish slug: lowercase alphanumerics and hyphens, 1-39 chars. Validated
 // before any API call so a malformed name can never be interpolated into a URL.
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,38}$`)
+
+// maxRepoLen is the longest repository name we will produce (nameRE's ceiling).
+// A random suffix is appended within this bound so the app identity that drives
+// the render stays clean while the repo name is unique.
+const maxRepoLen = 39
+
+// randSuffix returns 4 lowercase hex chars (2 crypto-random bytes). Appended to
+// the app name so repeated scaffolds of the same app never collide on repo
+// creation. On the (near-impossible) rand failure it returns a fixed valid slug
+// rather than erroring — a non-unique-but-valid name beats failing the request.
+func randSuffix() string {
+	b := make([]byte, 2)
+	if _, err := rand.Read(b); err != nil {
+		return "0000"
+	}
+	return hex.EncodeToString(b)
+}
 
 // Scaffolder implements port.Scaffolder by dispatching a GitHub Actions
 // "scaffold-new-app" workflow via a GitHub App, and by reading whether the
@@ -33,6 +53,10 @@ type Scaffolder struct {
 	httpClient      *http.Client
 	baseURL         string
 	logger          *slog.Logger
+
+	// newSuffix generates the per-repo collision-avoidance suffix. A field so
+	// tests can make repo names deterministic; production uses randSuffix.
+	newSuffix func() string
 }
 
 // ScaffolderConfig carries the settings NewScaffolder needs. The App fields
@@ -97,7 +121,21 @@ func NewScaffolder(cfg ScaffolderConfig, logger *slog.Logger) (*Scaffolder, erro
 		httpClient:      httpClient,
 		baseURL:         "https://api.github.com",
 		logger:          logger,
+		newSuffix:       randSuffix,
 	}, nil
+}
+
+// repoNameFor builds the collision-avoidance repository name: the app name plus
+// a "-<suffix>" tail, trimmed so the whole slug stays within maxRepoLen. The app
+// name itself (already validated) drives the rendered code identity unchanged;
+// only the repository name carries the suffix.
+func (s *Scaffolder) repoNameFor(appName string) string {
+	suffix := s.newSuffix()
+	base := appName
+	if l := len(base) + 1 + len(suffix); l > maxRepoLen {
+		base = strings.TrimRight(base[:maxRepoLen-1-len(suffix)], "-")
+	}
+	return base + "-" + suffix
 }
 
 // Dispatch validates the app name, mints an installation token, and fires the
@@ -114,10 +152,16 @@ func (s *Scaffolder) Dispatch(ctx context.Context, req port.ScaffoldRequest) (po
 		return port.ScaffoldResult{}, fmt.Errorf("dispatch scaffold: %w", err)
 	}
 
+	// appName drives the rendered code identity (kept clean); repoName is the
+	// unique target repository the workflow creates + pushes and the orchestrator
+	// polls for existence.
+	repoName := s.repoNameFor(req.Name)
+
 	payload, err := json.Marshal(map[string]any{
 		"ref": s.ref,
 		"inputs": map[string]string{
 			"appName":     req.Name,
+			"repoName":    repoName,
 			"owner":       s.newRepoOwner,
 			"domain":      req.Domain,
 			"description": req.Description,
@@ -140,6 +184,7 @@ func (s *Scaffolder) Dispatch(ctx context.Context, req port.ScaffoldRequest) (po
 
 	s.logger.InfoContext(ctx, "dispatched scaffold-new-app workflow",
 		slog.String("app", req.Name),
+		slog.String("repo", repoName),
 		slog.String("workflow", s.workflowFile),
 		slog.String("owner", s.newRepoOwner),
 		slog.String("actor", req.Actor),
@@ -147,8 +192,9 @@ func (s *Scaffolder) Dispatch(ctx context.Context, req port.ScaffoldRequest) (po
 
 	return port.ScaffoldResult{
 		AppName:    req.Name,
-		Repository: s.newRepoOwner + "/" + req.Name,
-		RepoURL:    "https://github.com/" + s.newRepoOwner + "/" + req.Name,
+		RepoName:   repoName,
+		Repository: s.newRepoOwner + "/" + repoName,
+		RepoURL:    "https://github.com/" + s.newRepoOwner + "/" + repoName,
 	}, nil
 }
 

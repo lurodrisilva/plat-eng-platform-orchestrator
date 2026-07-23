@@ -38,6 +38,8 @@ func newTestScaffolder(t *testing.T, baseURL string) *Scaffolder {
 	}
 	s.baseURL = baseURL
 	s.auth.baseURL = baseURL
+	// Deterministic repo suffix so dispatch/repo-name assertions are stable.
+	s.newSuffix = func() string { return "t3st" }
 	return s
 }
 
@@ -127,6 +129,9 @@ func TestDispatch_SendsCorrectBodyAndTreats204AsSuccess(t *testing.T) {
 	if inputs["appName"] != "my-app" {
 		t.Errorf("inputs.appName = %v, want my-app", inputs["appName"])
 	}
+	if inputs["repoName"] != "my-app-t3st" {
+		t.Errorf("inputs.repoName = %v, want my-app-t3st", inputs["repoName"])
+	}
 	if inputs["owner"] != "lurodrisilva" {
 		t.Errorf("inputs.owner = %v, want lurodrisilva", inputs["owner"])
 	}
@@ -140,11 +145,31 @@ func TestDispatch_SendsCorrectBodyAndTreats204AsSuccess(t *testing.T) {
 	if res.AppName != "my-app" {
 		t.Errorf("AppName = %q, want my-app", res.AppName)
 	}
-	if res.Repository != "lurodrisilva/my-app" {
-		t.Errorf("Repository = %q, want lurodrisilva/my-app", res.Repository)
+	if res.RepoName != "my-app-t3st" {
+		t.Errorf("RepoName = %q, want my-app-t3st", res.RepoName)
 	}
-	if res.RepoURL != "https://github.com/lurodrisilva/my-app" {
+	if res.Repository != "lurodrisilva/my-app-t3st" {
+		t.Errorf("Repository = %q, want lurodrisilva/my-app-t3st", res.Repository)
+	}
+	if res.RepoURL != "https://github.com/lurodrisilva/my-app-t3st" {
 		t.Errorf("RepoURL = %q", res.RepoURL)
+	}
+}
+
+// TestRepoNameFor_TrimsToBound verifies the suffix never pushes the repo name
+// past nameRE's 39-char ceiling: a max-length app name is trimmed, not rejected.
+func TestRepoNameFor_TrimsToBound(t *testing.T) {
+	s := newTestScaffolder(t, "http://unused.invalid")
+	long := strings.Repeat("a", 39)
+	got := s.repoNameFor(long)
+	if len(got) > maxRepoLen {
+		t.Errorf("repoNameFor(%d chars) = %q (%d), want <= %d", len(long), got, len(got), maxRepoLen)
+	}
+	if !nameRE.MatchString(got) {
+		t.Errorf("repoNameFor produced non-conforming name %q", got)
+	}
+	if !strings.HasSuffix(got, "-t3st") {
+		t.Errorf("repoNameFor = %q, want -t3st suffix", got)
 	}
 }
 
