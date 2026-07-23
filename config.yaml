@@ -5,12 +5,16 @@ server:
 
 auth:
   oidc:
-    # Microsoft Entra ID, v1 issuer (ADR-0015). The v2.0 issuer is
-    # login.microsoftonline.com/<tenant>/v2.0; the tenant here is the app
-    # registration's home tenant. The GitHub Actions issuer
-    # (token.actions.githubusercontent.com) is the multi-issuer CI fast-follow,
-    # not v1.
-    issuer: "${OIDC_ISSUER:-https://login.microsoftonline.com/8f77fb2e-7e77-477e-9a03-d078b7aad9c3/v2.0}"
+    # Microsoft Entra ID, v1 issuer (ADR-0015). The orchestrator's Entra app
+    # registration (api://224ccefb…) issues v1.0 access tokens
+    # (accessTokenAcceptedVersion unset), so the token's `iss` claim is
+    # https://sts.windows.net/<tenant>/ — NOT the v2.0
+    # login.microsoftonline.com/<tenant>/v2.0 form. The default must match the
+    # token exactly or the OIDC verifier rejects it (issuer mismatch). To move
+    # to v2.0 later: set the app's accessTokenAcceptedVersion=2 and switch this
+    # default to the …/v2.0 URL. The GitHub Actions issuer
+    # (token.actions.githubusercontent.com) is the multi-issuer CI fast-follow.
+    issuer: "${OIDC_ISSUER:-https://sts.windows.net/8f77fb2e-7e77-477e-9a03-d078b7aad9c3/}"
     # The orchestrator's Entra app registration. Every accepted token must carry
     # this as its `aud`. api://<appId> is the Application ID URI.
     audience: "${OIDC_AUDIENCE:-api://224ccefb-cfa7-42ba-9440-1f1b03aaca72}"
