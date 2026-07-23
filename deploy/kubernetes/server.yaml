@@ -24,7 +24,7 @@ spec:
       serviceAccountName: platform-orchestrator
       containers:
         - name: server
-          image: acrdevbf6cc837.azurecr.io/platform-orchestrator-server:phase-f3
+          image: acrdevbf6cc837.azurecr.io/platform-orchestrator-server:phase-f4
           ports:
             - name: http
               containerPort: 8080

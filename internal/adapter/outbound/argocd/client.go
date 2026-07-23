@@ -117,8 +117,13 @@ func (c *Client) CreateOrUpdate(ctx context.Context, spec port.ArgoAppSpec) erro
 				"namespace": spec.DestNS,
 			},
 			"syncPolicy": map[string]any{
-				"automated":   map[string]any{"prune": true, "selfHeal": false},
-				"syncOptions": []string{"CreateNamespace=false", "PruneLast=true", "ApplyOutOfSyncOnly=true"},
+				"automated": map[string]any{"prune": true, "selfHeal": false},
+				// CreateNamespace=true: each app deploys into a per-app/-env
+				// namespace (${appId}-${environment}) that does not pre-exist, so
+				// ArgoCD must create it on sync — otherwise the first sync fails with
+				// `namespaces "<ns>" not found`. (Phase G only worked because it
+				// targeted a pre-existing namespace.)
+				"syncOptions": []string{"CreateNamespace=true", "PruneLast=true", "ApplyOutOfSyncOnly=true"},
 				"retry":       map[string]any{"limit": 2, "backoff": map[string]any{"duration": "10s", "factor": 2, "maxDuration": "60s"}},
 			},
 		},
