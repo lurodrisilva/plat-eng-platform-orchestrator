@@ -11,11 +11,16 @@ type ScaffoldRequest struct {
 	Actor       string
 }
 
-// ScaffoldResult reports where the scaffolded application will live. Repository
-// is the "owner/name" slug; RepoURL is its https browse URL.
+// ScaffoldResult reports where the scaffolded application will live. AppName is
+// the clean application identity (drives the rendered code's namespaces/chart);
+// RepoName is the actual repository name, which carries a short random suffix so
+// repeated scaffolds never collide on the target account. Repository is the
+// "owner/RepoName" slug; RepoURL is its https browse URL. Poll RepoStatus by
+// RepoName (the repo that materializes), not AppName.
 type ScaffoldResult struct {
 	AppName    string
-	Repository string // owner/name
+	RepoName   string
+	Repository string // owner/RepoName
 	RepoURL    string
 }
 

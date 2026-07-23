@@ -113,11 +113,14 @@ func (h *Apps) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Poll by RepoName (the repo that materializes, carrying the collision-
+	// avoidance suffix), not AppName. appName is returned for display only.
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"appName":    result.AppName,
+		"repoName":   result.RepoName,
 		"repository": result.Repository,
 		"repoUrl":    result.RepoURL,
-		"statusUrl":  "/api/v1/apps/" + result.AppName,
+		"statusUrl":  "/api/v1/apps/" + result.RepoName,
 	})
 }
 
