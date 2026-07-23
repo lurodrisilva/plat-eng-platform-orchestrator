@@ -132,16 +132,16 @@ type Source struct {
 	repositoryFull   string
 }
 
-// NewSource creates a validated Source.
+// NewSource creates a validated Source. Only gitSHA is required: it is
+// load-bearing (ShortSHA feeds the deployment version, the composed chart, and
+// the component id → ArgoCD app name), so it must be ≥7 chars. githubRunID and
+// runAttempt are CI provenance — audit-only and absent for a human, portal-
+// initiated deploy (ADR-0006 human entrance) — so they are optional. A CI
+// caller still supplies all three; a portal caller supplies just the sha of the
+// image's source commit.
 func NewSource(gitSHA, gitRef, githubRunID string, runAttempt int, workflow, actor, repo string) (Source, error) {
 	if len(gitSHA) < 7 {
 		return Source{}, errors.New("git SHA must be at least 7 characters")
-	}
-	if githubRunID == "" {
-		return Source{}, errors.New("github run ID is required")
-	}
-	if runAttempt < 1 {
-		return Source{}, errors.New("run attempt must be >= 1")
 	}
 	return Source{
 		gitSHA:           gitSHA,
