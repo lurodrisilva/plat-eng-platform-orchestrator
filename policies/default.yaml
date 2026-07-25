@@ -64,3 +64,53 @@ tunableAllowlist:
         - autoscaling.targetCPUUtilizationPercentage
         - env
         - nodeSelector
+
+# J3 resource policy (application dependencies — ADR-0023). Governs the
+# `resources[]` a create/deploy request may declare: which types, and within a
+# type, which sizes/versions/storage and how many instances.
+#
+# THIS IS NOT THE TUNABLE ALLOWLIST, and the difference is the point. An
+# unallowed TUNING value mistunes a workload, so `tunableAllowlist` is
+# audit-first and can log-and-allow. An unallowed RESOURCE request spends money
+# and creates real Azure infrastructure, so this policy defaults to enforce and
+# a refusal is a 422 RESOURCE_NOT_ALLOWED. An `audit` mode exists for a staged
+# rollout, but it has to be asked for — an empty mode means enforce.
+#
+# THE COST IS STRUCTURAL. Each declared postgres is its OWN billed Flexible
+# Server, and `size: small` maps to GP_Standard_D2s_v3 — a General Purpose SKU
+# (~$140/mo observed on aks-test). The XRD enum has no burstable tier, so
+# maxInstancesPerDeployment caps COUNT, not unit price. If dev-tier spend
+# matters, the levers are adding a cheaper size to the XRD enum or steering
+# development at the in-cluster cloudnativepg engine — neither is decided here.
+#
+# Resolution is by environment KEY PRESENCE, not content: an environment listed
+# below uses its own rules in full, even when they allow nothing. An environment
+# absent from `environments` (e.g. staging) falls back to `default`.
+resourcePolicy:
+  mode: enforce
+  default:
+    allowedTypes: [postgres]
+    postgres:
+      allowedSizes: [small]
+      allowedVersions: ["16"]
+      maxStorageMb: 32768
+      maxInstancesPerDeployment: 1
+  environments:
+    # Developers iterate here, so a wider size/version window and a second
+    # instance — still bounded, because every one of them bills.
+    development:
+      allowedTypes: [postgres]
+      postgres:
+        allowedSizes: [small, medium]
+        allowedVersions: ["15", "16"]
+        maxStorageMb: 131072
+        maxInstancesPerDeployment: 2
+    # DENY. Under azure-flexibleserver the app authenticates as the server
+    # ADMIN — the provider generates that credential and the app binds straight
+    # to it. ADR-0010 ratified the engine as dev/non-production ONLY until the
+    # provider-sql least-privilege role lands, and until this entry existed that
+    # gate was documentary: nothing enforced it. The empty list is the whole
+    # mechanism, so do not "tidy" it away — an absent `production` key would
+    # fall back to `default` and quietly permit exactly what ADR-0010 forbids.
+    production:
+      allowedTypes: []

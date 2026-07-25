@@ -9,14 +9,16 @@ Deployment policy definitions consumed by `port.PolicyEvaluator`. Encodes which 
 ## Key Files
 | File | Description |
 |------|-------------|
-| `default.yaml` | `environmentRules` — `production` (allow `main` + `release/*`), `staging` (allow `main` + `release/*` + `hotfix/*`), `development` (allow all branches, all repos). `freezeWindows: []` |
+| `default.yaml` | Three sections: `environmentRules` (branch/repo gates per environment) + `freezeWindows: []`; `tunableAllowlist` (J3 values-overlay knobs); `resourcePolicy` (J3 application dependencies) |
 
 ## For AI Agents
 
 ### Working In This Directory
 - File path is referenced by `config.policies.configPath` (default `policies/default.yaml`).
 - `allowedRepos: []` semantics: empty = allow all (per current schema).
-- No `PolicyEvaluator` adapter exists yet — the file is read into structure-shaped configuration but there is no loader/evaluator code in `internal/adapter/outbound/`. When implementing, place under `internal/adapter/outbound/policy/`.
+- `environmentRules`/`freezeWindows` still have **no** `PolicyEvaluator` adapter — that section is structure-shaped configuration nothing reads. `tunableAllowlist` and `resourcePolicy` DO have loaders, both in `internal/adapter/outbound/policy/`.
+- The two J3 sections resolve per environment the same way: an environment listed under `environments` uses its own rules **in full**, and one that is absent falls back to `default`. Key presence decides, not content — `production.allowedTypes: []` under `resourcePolicy` is a deliberate deny-everything, and removing the key would silently grant the default.
+- The two J3 sections default to **opposite** modes on purpose: `tunableAllowlist` is audit-first (a bad tuning value mistunes a workload), `resourcePolicy` is enforce-first (a bad resource request spends money on real Azure infrastructure). An empty `resourcePolicy.mode` means enforce; a missing `resourcePolicy` section refuses every resource request.
 - Glob/regex used in `allowedBranches`: `release/*`, `hotfix/*` — interpret as shell-glob (single segment); reuse `path.Match` in the evaluator implementation.
 - Freeze windows shape (when added): expect `{from: <RFC3339>, to: <RFC3339>, environments: [...], reason: <string>}`.
 
