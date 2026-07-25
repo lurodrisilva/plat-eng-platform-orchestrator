@@ -34,7 +34,7 @@ func testPolicy(t *testing.T, mode string) *ResourcePolicy {
 					AllowedSizes:              []string{"small", "medium"},
 					AllowedVersions:           []string{"15", "16"},
 					MaxStorageMb:              131072,
-					MaxInstancesPerDeployment: 2,
+					MaxInstancesPerDeployment: 1,
 				},
 			},
 			"production": {AllowedTypes: []string{}},
@@ -95,8 +95,8 @@ func TestResourcePolicy_LimitViolations(t *testing.T) {
 		{
 			"too many instances",
 			"development",
-			[]port.ResourceRequest{pg("small", "16", 32768), pg("small", "16", 32768), pg("small", "16", 32768)},
-			"at most 2 per deployment",
+			[]port.ResourceRequest{pg("small", "16", 32768), pg("small", "16", 32768)},
+			"at most 1 per deployment",
 		},
 		{
 			"unimplemented type",

@@ -42,6 +42,7 @@ type deploymentDoc struct {
 	ChartConstraint string         `bson:"chartConstraint,omitempty"`
 	ChartAllowPre   bool           `bson:"chartAllowPrerelease,omitempty"`
 	Values          map[string]any `bson:"values,omitempty"`
+	Resources       []resourceDoc  `bson:"resources,omitempty"`
 	GitSHA          string         `bson:"gitSha"`
 	GitRef          string         `bson:"gitRef"`
 	RunID           string         `bson:"githubRunId"`
@@ -63,6 +64,25 @@ type deploymentDoc struct {
 	Artifact *artifactDoc `bson:"artifact,omitempty"`
 	ArgoApp  *argoAppDoc  `bson:"argoApp,omitempty"`
 	Health   *healthDoc   `bson:"health,omitempty"`
+}
+
+// resourceDoc persists a declared application dependency.
+//
+// The derived NAME is deliberately not stored. It is recomputed from the
+// application id on read, so the one identity that ties the XR, the Azure
+// server and the app's bind together cannot drift in the database either — a
+// stored name would be a second source of truth, which is the exact failure
+// mode ADR-0023 removes from the API.
+//
+// Persisting this at all is load-bearing, not bookkeeping: the executor reloads
+// the deployment from here before composing, so resources absent from the
+// document mean a chart composed without the database on EVERY deploy, not just
+// after a restart.
+type resourceDoc struct {
+	Type      string `bson:"type"`
+	Size      string `bson:"size"`
+	Version   string `bson:"version"`
+	StorageMb int    `bson:"storageMb"`
 }
 
 type metadataDoc struct {
@@ -171,6 +191,7 @@ func toDoc(d *deployment.Deployment) deploymentDoc {
 		ChartConstraint: d.ChartSource().VersionConstraint(),
 		ChartAllowPre:   d.ChartSource().AllowPrerelease(),
 		Values:          d.Values(),
+		Resources:       toResourceDocs(d.Resources()),
 		GitSHA:          d.Source().GitSHA(),
 		GitRef:          d.Source().GitRef(),
 		RunID:           d.Source().GitHubRunID(),
@@ -265,16 +286,56 @@ func fromDoc(doc deploymentDoc) (*deployment.Deployment, error) {
 		}
 	}
 
+	resources, err := fromResourceDocs(doc.ApplicationID, doc.Resources)
+	if err != nil {
+		return nil, fmt.Errorf("deployment %s: %w", doc.ID, err)
+	}
+
 	return deployment.Reconstitute(
 		deployment.DeploymentID(doc.ID),
 		doc.ApplicationID, doc.Team,
 		image, chart, target, source,
-		doc.Values, doc.CorrelationID,
+		doc.Values, resources, doc.CorrelationID,
 		status,
 		metadata, artifact, argoApp, health,
 		doc.ErrMsg,
 		doc.StartedAt, doc.CompletedAt, doc.UpdatedAt,
 	), nil
+}
+
+func toResourceDocs(resources []deployment.Resource) []resourceDoc {
+	if len(resources) == 0 {
+		return nil
+	}
+	out := make([]resourceDoc, 0, len(resources))
+	for _, r := range resources {
+		out = append(out, resourceDoc{
+			Type:      r.Type().String(),
+			Size:      r.Size(),
+			Version:   r.Version(),
+			StorageMb: r.StorageMb(),
+		})
+	}
+	return out
+}
+
+// fromResourceDocs rebuilds the dependencies, re-deriving each name from the
+// application id. A stored resource that no longer validates is an error rather
+// than a silent drop: the alternative is a deployment that reads as healthy
+// while quietly composing a chart without the database it was created with.
+func fromResourceDocs(applicationID string, docs []resourceDoc) ([]deployment.Resource, error) {
+	if len(docs) == 0 {
+		return nil, nil
+	}
+	out := make([]deployment.Resource, 0, len(docs))
+	for i, rd := range docs {
+		r, err := deployment.NewResource(rd.Type, applicationID, rd.Size, rd.Version, rd.StorageMb)
+		if err != nil {
+			return nil, fmt.Errorf("rebuild resources[%d]: %w", i, err)
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 // Compile-time interface compliance check.

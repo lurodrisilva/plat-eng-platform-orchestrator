@@ -41,7 +41,7 @@ func validSource(t *testing.T) Source {
 }
 
 func TestNew_ValidDeployment(t *testing.T) {
-	d, err := New("payment-service", "payments", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	d, err := New("payment-service", "payments", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 	if err != nil {
 		t.Fatalf("New() returned error: %v", err)
 	}
@@ -61,21 +61,21 @@ func TestNew_ValidDeployment(t *testing.T) {
 }
 
 func TestNew_MissingApplicationID(t *testing.T) {
-	_, err := New("", "payments", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	_, err := New("", "payments", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error for empty application ID")
 	}
 }
 
 func TestNew_MissingTeam(t *testing.T) {
-	_, err := New("app", "", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	_, err := New("app", "", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error for empty team")
 	}
 }
 
 func TestDeployment_TransitionTo_Valid(t *testing.T) {
-	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 
 	if err := d.TransitionTo(StatusValidating); err != nil {
 		t.Fatalf("transition to VALIDATING: %v", err)
@@ -86,7 +86,7 @@ func TestDeployment_TransitionTo_Valid(t *testing.T) {
 }
 
 func TestDeployment_TransitionTo_Invalid(t *testing.T) {
-	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 
 	if err := d.TransitionTo(StatusCompleted); err == nil {
 		t.Fatal("expected error for invalid transition RECEIVED → COMPLETED")
@@ -94,7 +94,7 @@ func TestDeployment_TransitionTo_Invalid(t *testing.T) {
 }
 
 func TestDeployment_Fail(t *testing.T) {
-	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 	_ = d.TransitionTo(StatusValidating)
 
 	if err := d.Fail("chart not found"); err != nil {
@@ -112,7 +112,7 @@ func TestDeployment_Fail(t *testing.T) {
 }
 
 func TestDeployment_Complete(t *testing.T) {
-	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, "")
+	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), nil, nil, "")
 	_ = d.TransitionTo(StatusValidating)
 	_ = d.TransitionTo(StatusMetadataGenerated)
 	_ = d.TransitionTo(StatusChartResolved)
@@ -132,7 +132,7 @@ func TestDeployment_Complete(t *testing.T) {
 
 func TestDeployment_Values_CopyProtection(t *testing.T) {
 	original := map[string]any{"key": "value"}
-	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), original, "")
+	d, _ := New("app", "team", validImage(t), validChart(t), validTarget(t), validSource(t), original, nil, "")
 
 	// Mutating original should not affect deployment
 	original["key"] = "mutated"

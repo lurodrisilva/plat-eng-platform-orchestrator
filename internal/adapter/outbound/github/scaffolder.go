@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,15 +158,34 @@ func (s *Scaffolder) Dispatch(ctx context.Context, req port.ScaffoldRequest) (po
 	// polls for existence.
 	repoName := s.repoNameFor(req.Name)
 
+	// workflow_dispatch inputs are strings on the wire even when the workflow
+	// declares a choice or a number, so dbStorageMb is formatted rather than
+	// sent as an integer.
+	//
+	// An unset DB field is OMITTED, not sent empty. The workflow's `default:`
+	// only applies to an input that was not provided at all; an explicit "" would
+	// override the default with an empty string and the render would write an
+	// empty size into the umbrella.
+	inputs := map[string]string{
+		"appName":     req.Name,
+		"repoName":    repoName,
+		"owner":       s.newRepoOwner,
+		"domain":      req.Domain,
+		"description": req.Description,
+	}
+	if req.DBSize != "" {
+		inputs["dbSize"] = req.DBSize
+	}
+	if req.DBVersion != "" {
+		inputs["dbVersion"] = req.DBVersion
+	}
+	if req.DBStorageMb > 0 {
+		inputs["dbStorageMb"] = strconv.Itoa(req.DBStorageMb)
+	}
+
 	payload, err := json.Marshal(map[string]any{
-		"ref": s.ref,
-		"inputs": map[string]string{
-			"appName":     req.Name,
-			"repoName":    repoName,
-			"owner":       s.newRepoOwner,
-			"domain":      req.Domain,
-			"description": req.Description,
-		},
+		"ref":    s.ref,
+		"inputs": inputs,
 	})
 	if err != nil {
 		return port.ScaffoldResult{}, fmt.Errorf("dispatch scaffold: marshal payload: %w", err)

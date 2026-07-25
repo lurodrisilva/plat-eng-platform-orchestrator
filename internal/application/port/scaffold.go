@@ -3,12 +3,22 @@ package port
 import "context"
 
 // ScaffoldRequest is the intent to scaffold a new application repository.
+//
+// The DB* fields are the app's default database shape, written into the
+// scaffolded repo's umbrella values. They are the "repo holds the default" half
+// of ADR-0023; a later deploy may override them via resources[]. Empty means
+// the scaffolder's own defaults apply — the orchestrator does not invent a
+// shape the caller did not ask for.
 type ScaffoldRequest struct {
 	Name        string
 	Team        string
 	Domain      string
 	Description string
 	Actor       string
+
+	DBSize      string
+	DBVersion   string
+	DBStorageMb int
 }
 
 // ScaffoldResult reports where the scaffolded application will live. AppName is

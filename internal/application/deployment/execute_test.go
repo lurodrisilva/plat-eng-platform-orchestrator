@@ -143,7 +143,7 @@ func newReceivedDeployment(t *testing.T) *deployment.Deployment {
 	if err != nil {
 		t.Fatalf("source: %v", err)
 	}
-	d, err := deployment.New("payment-service", "payments", image, chart, target, source, nil, "corr-1")
+	d, err := deployment.New("payment-service", "payments", image, chart, target, source, nil, nil, "corr-1")
 	if err != nil {
 		t.Fatalf("new deployment: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestExecute_TerminalDeployment_NoOp(t *testing.T) {
 	done := deployment.Reconstitute(
 		base.ID(), base.ApplicationID(), base.Team(),
 		base.Image(), base.ChartSource(), base.Target(), base.Source(),
-		nil, base.CorrelationID(),
+		nil, nil, base.CorrelationID(),
 		deployment.StatusCompleted,
 		nil, nil, nil, nil,
 		"", now, now, now,
@@ -278,7 +278,7 @@ func TestExecute_ReDriveFromMidFlight_Completes(t *testing.T) {
 	mid := deployment.Reconstitute(
 		base.ID(), base.ApplicationID(), base.Team(),
 		base.Image(), base.ChartSource(), base.Target(), base.Source(),
-		nil, base.CorrelationID(),
+		nil, nil, base.CorrelationID(),
 		deployment.StatusArtifactPublished,
 		md, art, nil, nil,
 		"", now, time.Time{}, now,
@@ -342,7 +342,7 @@ func TestExecute_CorruptState_NoMetadata_FailsCleanly(t *testing.T) {
 	corrupt := deployment.Reconstitute(
 		base.ID(), base.ApplicationID(), base.Team(),
 		base.Image(), base.ChartSource(), base.Target(), base.Source(),
-		nil, base.CorrelationID(),
+		nil, nil, base.CorrelationID(),
 		deployment.StatusChartResolved,
 		nil, nil, nil, nil, // metadata nil despite CHART_RESOLVED
 		"", now, time.Time{}, now,

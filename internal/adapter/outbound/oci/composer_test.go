@@ -195,3 +195,161 @@ func TestCompose_Guards(t *testing.T) {
 		t.Error("empty version should error")
 	}
 }
+
+// --- declared application dependencies (S4, ADR-0023) ------------------------
+
+// umbrellaDefaults mirrors the shape the real hex-scaffold-umbrella ships: a
+// template-named database the deployment must replace, not merge with.
+func umbrellaDefaults() map[string]any {
+	return map[string]any{
+		"sqldatabase": map[string]any{
+			"enabled": true,
+			"engine":  "azure-flexibleserver",
+			"databases": map[string]any{
+				"sql": []any{
+					map[string]any{
+						"name": "acct",
+						"azureFlexibleServer": map[string]any{
+							"size": "small", "version": "16", "storageMb": 32768, "databaseName": "acct-db",
+						},
+					},
+				},
+			},
+		},
+		"hex-scaffold": map[string]any{
+			"postgres": map[string]any{
+				"bindBuildingBlock": map[string]any{"enabled": true, "instanceName": "acct"},
+			},
+		},
+	}
+}
+
+// platformValuesFor is the shape the orchestrator's translator emits. It is
+// asserted key-for-key against the real translator in
+// internal/application/deployment/resources_test.go
+// (TestPlatformValues_OnePostgresEmitsTheExactChartShape); this package cannot
+// import the application layer, so the two are pinned by that test rather than
+// shared as one literal.
+func platformValuesFor(app, team, environment string) map[string]any {
+	return map[string]any{
+		"sqldatabase": map[string]any{
+			"enabled": true, "engine": "azure-flexibleserver",
+			"team": team, "environment": environment,
+			"databases": map[string]any{
+				"sql": []any{
+					map[string]any{
+						"name": app,
+						"azureFlexibleServer": map[string]any{
+							"size": "medium", "version": "16", "storageMb": 65536, "databaseName": app + "-db",
+						},
+					},
+				},
+			},
+		},
+		"hex-scaffold": map[string]any{
+			"postgres": map[string]any{
+				"bindBuildingBlock": map[string]any{"enabled": true, "instanceName": app},
+			},
+		},
+	}
+}
+
+// The round trip the S4 DoD asks for: compose the umbrella with the translator's
+// values and prove the baked values.yaml describes exactly ONE database, named
+// after the application, with the app bound to that same name.
+//
+// The template's own `acct` entry must be GONE, not merged alongside. That is
+// load-bearing and it works because databases.sql is a LIST — deepMerge recurses
+// into maps only, so a list replaces wholesale. Half-merging would leave the
+// template's database in the render, which is the billed orphan this slice
+// exists to eliminate.
+func TestCompose_DeclaredDatabaseReplacesTheTemplateDefault(t *testing.T) {
+	archive := makeArchive(t, "orders-v3-umbrella", umbrellaDefaults())
+
+	out, err := NewComposer(testLogger()).Compose(context.Background(), archive,
+		nil, platformValuesFor("orders-v3", "payments", "development"), "1.0.0", "abc1234", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	c := loadComposed(t, out.PackageBytes)
+
+	sql, ok := c.Values["sqldatabase"].(map[string]any)["databases"].(map[string]any)["sql"].([]any)
+	if !ok {
+		t.Fatalf("databases.sql is %T", c.Values["sqldatabase"].(map[string]any)["databases"])
+	}
+	if len(sql) != 1 {
+		t.Fatalf("composed %d databases, want exactly 1 — each one is a separate billed server: %#v", len(sql), sql)
+	}
+
+	entry := sql[0].(map[string]any)
+	if entry["name"] != "orders-v3" {
+		t.Errorf("XR name = %v, want orders-v3 (the application id), not the template's", entry["name"])
+	}
+	azure := entry["azureFlexibleServer"].(map[string]any)
+	if azure["databaseName"] != "orders-v3-db" || azure["size"] != "medium" || azure["storageMb"] != float64(65536) {
+		t.Errorf("azureFlexibleServer = %#v, want the declared shape", azure)
+	}
+
+	bind := c.Values["hex-scaffold"].(map[string]any)["postgres"].(map[string]any)["bindBuildingBlock"].(map[string]any)
+	if bind["instanceName"] != entry["name"] {
+		t.Errorf("bind instanceName = %v but the XR is named %v — the app would wait forever on Secrets nothing creates",
+			bind["instanceName"], entry["name"])
+	}
+}
+
+// The engine is platform-locked. A caller cannot reach it through `values`,
+// because the composer merges defaults < user < platform. The create boundary
+// refuses such an overlay outright (reservedValuePaths), so this is the second
+// of two independent guards, not the only one.
+func TestCompose_UserOverlayCannotReachTheDeclaredDatabase(t *testing.T) {
+	archive := makeArchive(t, "orders-v3-umbrella", umbrellaDefaults())
+
+	hostile := map[string]any{
+		"sqldatabase": map[string]any{
+			"engine": "cloudnativepg",
+			"databases": map[string]any{
+				"sql": []any{map[string]any{"name": "someone-elses-db"}},
+			},
+		},
+		"hex-scaffold": map[string]any{
+			"postgres": map[string]any{"bindBuildingBlock": map[string]any{"instanceName": "someone-elses-db"}},
+		},
+	}
+
+	out, err := NewComposer(testLogger()).Compose(context.Background(), archive,
+		hostile, platformValuesFor("orders-v3", "payments", "development"), "1.0.0", "abc1234", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	c := loadComposed(t, out.PackageBytes)
+
+	sqldb := c.Values["sqldatabase"].(map[string]any)
+	if sqldb["engine"] != "azure-flexibleserver" {
+		t.Errorf("engine = %v, want azure-flexibleserver (platform-locked)", sqldb["engine"])
+	}
+	sql := sqldb["databases"].(map[string]any)["sql"].([]any)
+	if len(sql) != 1 || sql[0].(map[string]any)["name"] != "orders-v3" {
+		t.Errorf("databases.sql = %#v, want the platform's single orders-v3 entry", sql)
+	}
+	bind := c.Values["hex-scaffold"].(map[string]any)["postgres"].(map[string]any)["bindBuildingBlock"].(map[string]any)
+	if bind["instanceName"] != "orders-v3" {
+		t.Errorf("bind instanceName = %v, want orders-v3", bind["instanceName"])
+	}
+}
+
+// A deployment that declares no resources composes exactly as it did before
+// declared dependencies existed: the chart's own defaults, untouched.
+func TestCompose_NoPlatformValuesLeavesTheChartDefaultsAlone(t *testing.T) {
+	archive := makeArchive(t, "orders-v3-umbrella", umbrellaDefaults())
+
+	out, err := NewComposer(testLogger()).Compose(context.Background(), archive, nil, nil, "1.0.0", "abc1234", nil)
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	c := loadComposed(t, out.PackageBytes)
+
+	sql := c.Values["sqldatabase"].(map[string]any)["databases"].(map[string]any)["sql"].([]any)
+	if len(sql) != 1 || sql[0].(map[string]any)["name"] != "acct" {
+		t.Errorf("databases.sql = %#v, want the chart's own default untouched", sql)
+	}
+}

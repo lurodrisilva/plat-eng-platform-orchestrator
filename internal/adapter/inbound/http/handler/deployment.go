@@ -52,6 +52,17 @@ type createRequest struct {
 		AppProject  string `json:"appProject"`
 	} `json:"target"`
 	Values map[string]any `json:"values"`
+	// Resources are the application dependencies to provision alongside the app
+	// (ADR-0023). Name is accepted in the wire shape only so a caller that sends
+	// one gets it IGNORED rather than silently reshaping the request: the name
+	// is derived from application.id server-side and never read from here.
+	Resources []struct {
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Size      string `json:"size"`
+		Version   string `json:"version"`
+		StorageMb int    `json:"storageMb"`
+	} `json:"resources"`
 	Source struct {
 		GitSHA           string `json:"gitSha"`
 		GitRef           string `json:"gitRef"`
@@ -98,6 +109,25 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A caller-supplied resource name is dropped here, loudly. Honouring it is
+	// what let orders-v4 run against a server named after the template it was
+	// scaffolded from; refusing the whole request would break a portal that
+	// echoes back what the API reported.
+	resources := make([]deploymentapp.ResourceSpec, 0, len(req.Resources))
+	for _, r := range req.Resources {
+		if r.Name != "" {
+			logger.WarnContext(ctx, "ignoring caller-supplied resource name; it is derived from the application id",
+				slog.String("suppliedName", r.Name),
+				slog.String("applicationId", req.Application.ID))
+		}
+		resources = append(resources, deploymentapp.ResourceSpec{
+			Type:      r.Type,
+			Size:      r.Size,
+			Version:   r.Version,
+			StorageMb: r.StorageMb,
+		})
+	}
+
 	cmd := deploymentapp.CreateDeploymentCommand{
 		ApplicationID:    req.Application.ID,
 		Team:             req.Application.Team,
@@ -113,6 +143,7 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 		Namespace:        req.Target.Namespace,
 		AppProject:       req.Target.AppProject,
 		Values:           req.Values,
+		Resources:        resources,
 		GitSHA:           req.Source.GitSHA,
 		GitRef:           req.Source.GitRef,
 		GitHubRunID:      req.Source.GitHubRunID,
@@ -131,6 +162,15 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 		var locked *deploymentapp.LockedKnobError
 		if errors.As(err, &locked) {
 			writeError(w, http.StatusUnprocessableEntity, "LOCKED_KNOB_OVERRIDE", err.Error())
+			return
+		}
+		// A refused application dependency is its own 422 so the caller can tell
+		// "the platform will not provision this for you" apart from "your
+		// deployment is malformed" — the first is a policy answer that a
+		// different size or environment may change.
+		var notAllowed *deploymentapp.ResourceNotAllowedError
+		if errors.As(err, &notAllowed) {
+			writeError(w, http.StatusUnprocessableEntity, "RESOURCE_NOT_ALLOWED", err.Error())
 			return
 		}
 		writeError(w, http.StatusUnprocessableEntity, "DEPLOYMENT_FAILED", err.Error())
