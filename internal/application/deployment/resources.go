@@ -30,11 +30,16 @@ var reservedValuePaths = []string{
 	"hex-scaffold.postgres.bindBuildingBlock",
 }
 
-// reservedOverrides returns the reserved paths a values overlay tries to set,
-// as dotted prefixes rather than every leaf beneath them — a caller who sent a
-// whole `sqldatabase` block should be told the block is reserved, not handed a
-// list of its leaves.
-func reservedOverrides(values map[string]any) []string {
+// ReservedValueOverrides returns the reserved paths a values overlay tries to
+// set, as dotted prefixes rather than every leaf beneath them — a caller who
+// sent a whole `sqldatabase` block should be told the block is reserved, not
+// handed a list of its leaves.
+//
+// Exported so the :validate dry-run can report the same verdict the create
+// boundary will reach. A dry-run that answers "not blocked" for an overlay
+// create then refuses is worse than no dry-run: the portal would offer a
+// Deploy button for a request that cannot succeed.
+func ReservedValueOverrides(values map[string]any) []string {
 	var hit []string
 	for _, path := range reservedValuePaths {
 		if valuesHavePath(values, strings.Split(path, ".")) {

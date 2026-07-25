@@ -4,10 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// seedKeys mirrors the slice-1 allowlist in policies/default.yaml.
+// seedKeys is a fixture for the MECHANISM tests below (matching, flattening,
+// per-environment resolution). It no longer mirrors policies/default.yaml —
+// slice S7 re-scoped the shipped keys to the umbrella's `hex-scaffold.` alias.
+// Left root-scoped on purpose: these tests are about how a key set is applied,
+// not which keys ship, and TestShippedAllowlist_* covers the real file.
 var seedKeys = []string{
 	"replicaCount",
 	"resources.requests.cpu",
@@ -265,5 +270,132 @@ func mustPerEnvAllowlist(t *testing.T, mode string, defaultKeys []string, envKey
 func TestLoadTunableAllowlist_MissingFile(t *testing.T) {
 	if _, err := LoadTunableAllowlist(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
 		t.Fatal("expected error for missing config file")
+	}
+}
+
+// --- the shipped allowlist is alias-scoped (S7, defect D3) -------------------
+
+// shippedAllowlist parses the real policies/default.yaml. The file is the
+// artifact that runs; a test over a hand-built key set would pass while the
+// deployed config stayed wrong, which is precisely the failure D3 describes.
+func shippedAllowlist(t *testing.T) *TunableAllowlist {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "..", "policies", "default.yaml")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("policies/default.yaml not reachable from the test: %v", err)
+	}
+	al, err := LoadTunableAllowlist(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return al
+}
+
+// Every allowlisted key must address the app through its umbrella alias. The
+// umbrella has no root `replicaCount` or `resources` key, so a root-scoped
+// entry validates a path the chart never reads — it renders nothing and errors
+// nowhere.
+func TestShippedAllowlist_EveryKeyIsAliasScoped(t *testing.T) {
+	al := shippedAllowlist(t)
+
+	sets := map[string][]string{"<default>": al.defaultKeys}
+	for env, keys := range al.envKeys {
+		sets[env] = keys
+	}
+	for env, keys := range sets {
+		if len(keys) == 0 {
+			t.Errorf("%s: no allowlisted keys at all", env)
+		}
+		for _, k := range keys {
+			if !strings.HasPrefix(k, "hex-scaffold.") {
+				t.Errorf("%s: key %q is not scoped to the umbrella's subchart alias", env, k)
+			}
+			// A bare alias entry would make the whole subchart tunable, including
+			// the bind that decides which database's credentials the app reads.
+			if k == "hex-scaffold" {
+				t.Errorf("%s: a blanket %q entry makes every subchart value tunable", env, k)
+			}
+		}
+	}
+}
+
+// The S7 DoD, against the shipped file: a legitimate development overlay is not
+// blocked, and a platform-locked knob is. `blocked` is only ever true in
+// enforce mode, so the verdict is computed in enforce here — the file itself
+// ships `audit` deliberately, because the portal still sends root-scoped keys
+// until S6 and enforcing now would turn every wizard knob into a 422.
+func TestShippedAllowlist_DoD_LegitimateOverlayVersusLockedKnob(t *testing.T) {
+	shipped := shippedAllowlist(t)
+	if shipped.Mode() != ModeAudit {
+		t.Errorf("shipped mode = %q, want %q until slice S6 re-scopes the portal overlay",
+			shipped.Mode(), ModeAudit)
+	}
+
+	enforcing, err := NewTunableAllowlist(ModeEnforce, shipped.defaultKeys, shipped.envKeys)
+	if err != nil {
+		t.Fatalf("rebuild in enforce mode: %v", err)
+	}
+
+	legit := map[string]any{
+		"hex-scaffold": map[string]any{
+			"resources": map[string]any{
+				"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
+				"limits":   map[string]any{"cpu": "500m", "memory": "512Mi"},
+			},
+			"autoscaling": map[string]any{"minReplicas": 2, "maxReplicas": 4},
+		},
+	}
+	if dec := enforcing.Validate(context.Background(), legit, "development"); dec.Reject {
+		t.Errorf("a legitimate development overlay must not be blocked: %v", dec.Violations)
+	}
+
+	locked := map[string]any{
+		"hex-scaffold": map[string]any{"securityContext": map[string]any{"runAsNonRoot": false}},
+	}
+	dec := enforcing.Validate(context.Background(), locked, "development")
+	if !dec.Reject {
+		t.Fatal("securityContext.runAsNonRoot is guardrail G4 and must be blocked")
+	}
+	if len(dec.Violations) != 1 || dec.Violations[0] != "hex-scaffold.securityContext.runAsNonRoot" {
+		t.Errorf("violations = %v, want exactly the alias-scoped locked key", dec.Violations)
+	}
+}
+
+// The D3 detector. The portal still emits root-scoped keys until S6, and those
+// overlays are silently discarded by Helm today. After the re-key they surface
+// as violations — logged rather than blocked, because the file ships audit —
+// which turns a silent failure into an observable one.
+func TestShippedAllowlist_RootScopedOverlayIsReportedNotSilentlyAccepted(t *testing.T) {
+	al := shippedAllowlist(t)
+
+	dec := al.Validate(context.Background(),
+		map[string]any{"resources": map[string]any{"requests": map[string]any{"cpu": "100m"}}},
+		"development")
+
+	if len(dec.Violations) == 0 {
+		t.Fatal("a root-scoped overlay reaches no template; it must be reported, not accepted")
+	}
+	if dec.Violations[0] != "resources.requests.cpu" {
+		t.Errorf("violations = %v, want the root-scoped path named verbatim", dec.Violations)
+	}
+	if dec.Reject {
+		t.Error("audit mode must log this, not block it — the portal cannot be re-scoped until S6")
+	}
+}
+
+// Production stays narrower than development, alias or not: only requests are
+// tunable, so the platform keeps ownership of scaling.
+func TestShippedAllowlist_ProductionStaysNarrowerThanDevelopment(t *testing.T) {
+	al := shippedAllowlist(t)
+	overlay := map[string]any{
+		"hex-scaffold": map[string]any{
+			"autoscaling": map[string]any{"maxReplicas": 20},
+		},
+	}
+	if dec := al.Validate(context.Background(), overlay, "production"); len(dec.Violations) != 1 {
+		t.Errorf("production violations = %v, want autoscaling reported as locked", dec.Violations)
+	}
+	if dec := al.Validate(context.Background(), overlay, "development"); len(dec.Violations) != 0 {
+		t.Errorf("development violations = %v, want autoscaling tunable", dec.Violations)
 	}
 }

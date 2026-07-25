@@ -108,7 +108,7 @@ func (h *CreateDeploymentHandler) Handle(ctx context.Context, cmd CreateDeployme
 	// server with NO resourcePolicy evaluation at all. The tunable allowlist
 	// ships audit-first and would log-and-allow exactly that. resources[] is the
 	// only way in.
-	if reserved := reservedOverrides(cmd.Values); len(reserved) > 0 {
+	if reserved := ReservedValueOverrides(cmd.Values); len(reserved) > 0 {
 		return CreateDeploymentResult{}, &LockedKnobError{Keys: reserved}
 	}
 

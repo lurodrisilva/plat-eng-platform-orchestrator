@@ -288,10 +288,17 @@ type validateResponse struct {
 }
 
 // ValidateTunables handles POST /api/v1/deployments:validate — a non-mutating
-// dry-run of the J3 tunable-allowlist check over a values overlay for a target
-// environment, for the portal create wizard. Always returns 200 with the
-// verdict; blocked = the overlay would be rejected at create (enforce mode).
-// Dev-open: no OIDC, no secrets, values only.
+// dry-run of the J3 values-overlay checks for a target environment, for the
+// portal create wizard. Always returns 200 with the verdict; blocked = the
+// overlay would be rejected at create. Dev-open: no OIDC, no secrets, values
+// only.
+//
+// Two checks, and they do NOT share a mode. The tunable allowlist is
+// mode-dependent (audit logs, enforce blocks). Platform-reserved paths are
+// refused at create regardless of mode, so an overlay touching one is reported
+// blocked here even when the allowlist is in audit — otherwise the dry-run
+// would answer "not blocked" for a request create is certain to refuse, and
+// the portal would offer a Deploy button that cannot work.
 func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
 	var req validateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -307,6 +314,13 @@ func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
 		if dec.Violations != nil {
 			resp.Violations = dec.Violations
 		}
+	}
+
+	// Reserved paths are reported first: they are the harder refusal, and a
+	// caller reading a truncated list should see the unconditional one.
+	if reserved := deploymentapp.ReservedValueOverrides(req.Values); len(reserved) > 0 {
+		resp.Blocked = true
+		resp.Violations = append(reserved, resp.Violations...)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
