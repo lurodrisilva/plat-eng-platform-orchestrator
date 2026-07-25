@@ -394,11 +394,102 @@ func baseMetadata(d *deployment.Deployment) deployment.Metadata {
 }
 
 // platformValues are values the platform enforces on every deployment,
-// overriding any user overlay (they win in the composer merge). The J3 spine
-// enforces its locks at the create boundary (ADR-0006), so this is currently
-// empty — it is the seam where platform-forced chart values (e.g. a hardened
-// securityContext) attach without touching the composer.
-func platformValues(_ *deployment.Deployment) map[string]any { return nil }
+// overriding any user overlay (they win in the composer merge).
+//
+// This is the ONE place the declared-dependency chart shape exists in code. A
+// deployment that declares no resources still gets nil, so nothing changes for
+// the deployments that came before this existed.
+//
+// Why it belongs here rather than at create: the umbrella is the deploy unit
+// (ADR-0008), so the database and the app are installed as one Helm release and
+// ordered by ArgoCD sync-wave. Emitting the building block's values into that
+// release is what makes "create the app AND its Azure resources" a single
+// convergence rather than two.
+//
+// Everything emitted here is platform-owned. `engine` in particular never comes
+// from the caller: the composer merges defaults < user < platform, so these keys
+// cannot be reached from the request's `values` overlay, and the create boundary
+// additionally refuses an overlay that tries (see reservedValuePaths).
+func platformValues(d *deployment.Deployment) map[string]any {
+	resources := d.Resources()
+	if len(resources) == 0 {
+		return nil
+	}
+
+	var sqlDatabases []any
+	for _, r := range resources {
+		if r.Type() != deployment.ResourceTypePostgres {
+			continue
+		}
+		sqlDatabases = append(sqlDatabases, map[string]any{
+			"name": r.Name(),
+			"azureFlexibleServer": map[string]any{
+				"size":         r.Size(),
+				"version":      r.Version(),
+				"storageMb":    r.StorageMb(),
+				"databaseName": r.DatabaseName(),
+			},
+		})
+	}
+	if len(sqlDatabases) == 0 {
+		return nil
+	}
+
+	// The umbrella's SQL building block, aliased `sqldatabase` in its Chart.yaml.
+	//
+	// databases.sql is a LIST, and the composer's deep-merge recurses into maps
+	// only — a list replaces wholesale. That is load-bearing: the chart ships a
+	// default entry, and this substitutes it rather than half-merging with it.
+	vals := map[string]any{
+		"sqldatabase": map[string]any{
+			"enabled": true,
+			// ADR-0020's paved road, and the reason this deployment bills. Not a
+			// caller knob: an app cannot ask for a different provisioner.
+			"engine":      "azure-flexibleserver",
+			"team":        d.Team(),
+			"environment": d.Target().Environment(),
+			"databases": map[string]any{
+				"sql": sqlDatabases,
+			},
+		},
+	}
+
+	// The app's half of the contract. instanceName is the SAME derived name, and
+	// hex-scaffold derives all four secretKeyRefs from it (slice S1), so "which
+	// database" is one value rather than five copies of one. Both halves are
+	// written from the same Resource here, which is what makes them unable to
+	// disagree — the failure this slice exists to close.
+	//
+	// The alias is the subchart's name in the umbrella's Chart.yaml. It is
+	// deliberately NOT the deployment's application id: the umbrella is rendered
+	// from the net-hexagonal template, and the template's subchart is named
+	// hex-scaffold whatever the app scaffolded from it is called.
+	if bind := bindValues(resources); bind != nil {
+		vals["hex-scaffold"] = bind
+	}
+	return vals
+}
+
+// bindValues builds the application's bind to the composed connection Secrets.
+// Exactly one postgres instance can be bound, which the aggregate already
+// guarantees (see validateResourceSet) — this reads the first and does not
+// invent a policy of its own.
+func bindValues(resources []deployment.Resource) map[string]any {
+	for _, r := range resources {
+		if r.Type() != deployment.ResourceTypePostgres {
+			continue
+		}
+		return map[string]any{
+			"postgres": map[string]any{
+				"bindBuildingBlock": map[string]any{
+					"enabled":      true,
+					"instanceName": r.Name(),
+				},
+			},
+		}
+	}
+	return nil
+}
 
 // annotations carries deployment provenance onto the composed chart.
 func annotations(d *deployment.Deployment) map[string]string {

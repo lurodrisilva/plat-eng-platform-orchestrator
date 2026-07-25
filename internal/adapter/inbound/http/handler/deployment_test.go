@@ -15,6 +15,7 @@ import (
 	"github.com/myorg/platform-orchestrator/internal/adapter/outbound/policy"
 	deploymentapp "github.com/myorg/platform-orchestrator/internal/application/deployment"
 	"github.com/myorg/platform-orchestrator/internal/application/port"
+	"github.com/myorg/platform-orchestrator/internal/domain/deployment"
 )
 
 var errStubReject = errors.New("stub: token rejected")
@@ -195,5 +196,85 @@ func TestCreate_InvalidToken_Returns401(t *testing.T) {
 	rr := postCreate(t, h, "Bearer bad", `{}`)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// --- declared application dependencies (S4, ADR-0023) ------------------------
+
+// capturingRepo records the aggregate the use case persists, so a test can
+// assert what the API actually created rather than only what it answered.
+type capturingRepo struct{ saved *deployment.Deployment }
+
+func (r *capturingRepo) Save(_ context.Context, d *deployment.Deployment) error {
+	r.saved = d
+	return nil
+}
+func (r *capturingRepo) FindByID(context.Context, deployment.DeploymentID) (*deployment.Deployment, error) {
+	return nil, deployment.ErrNotFound
+}
+func (r *capturingRepo) FindByApplication(context.Context, string, string, int) ([]*deployment.Deployment, error) {
+	return nil, nil
+}
+
+func createHandlerWith(repo *capturingRepo, rp port.ResourcePolicyEvaluator) *Deployment {
+	app := deploymentapp.Application{
+		Commands: deploymentapp.Commands{
+			CreateDeployment: deploymentapp.NewCreateDeploymentHandler(repo, nil, nil, rp, discardLogger()),
+		},
+	}
+	return NewDeployment(app, stubValidator{}, nil, discardLogger())
+}
+
+const createBodyWithNamedResource = `{
+  "application": {"id": "orders-v3", "team": "payments"},
+  "image": {"repository": "ghcr.io/acme/orders-v3", "tag": "latest",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "chart": {"repository": "ghcr.io/acme/helm-charts", "name": "orders-v3-umbrella", "versionConstraint": "*"},
+  "target": {"environment": "development", "cluster": "aks-test",
+             "namespace": "orders-v3-development", "appProject": "platform"},
+  "resources": [{"type": "postgres", "name": "acct", "size": "small", "version": "16"}],
+  "source": {"gitSha": "abcdef1234567890abcdef1234567890abcdef12"}
+}`
+
+// The reported symptom, at the API boundary: a caller naming the database is
+// IGNORED, not honoured, so the request cannot make the app and its database
+// disagree. The request still succeeds — refusing it would break a portal that
+// echoes back what the API reported.
+func TestCreate_CallerSuppliedResourceNameIsIgnored(t *testing.T) {
+	repo := &capturingRepo{}
+	rr := postCreate(t, createHandlerWith(repo, allowResources{}), "Bearer good", createBodyWithNamedResource)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if repo.saved == nil {
+		t.Fatal("nothing was persisted")
+	}
+
+	resources := repo.saved.Resources()
+	if len(resources) != 1 {
+		t.Fatalf("persisted %d resources, want 1", len(resources))
+	}
+	if resources[0].Name() != "orders-v3" {
+		t.Errorf("resource name = %q, want orders-v3 (derived) — the caller sent \"acct\"", resources[0].Name())
+	}
+	if resources[0].DatabaseName() != "orders-v3-db" {
+		t.Errorf("database name = %q, want orders-v3-db", resources[0].DatabaseName())
+	}
+}
+
+// A refused dependency is its own 422 code, distinguishable from a malformed
+// deployment: the first is a policy answer a different size or environment may
+// change.
+func TestCreate_RefusedResourceReturns422ResourceNotAllowed(t *testing.T) {
+	repo := &capturingRepo{}
+	rr := postCreate(t, createHandlerWith(repo, denyResources{}), "Bearer good", createBodyWithNamedResource)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body=%s)", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("RESOURCE_NOT_ALLOWED")) {
+		t.Errorf("body = %s, want the RESOURCE_NOT_ALLOWED code", rr.Body.String())
+	}
+	if repo.saved != nil {
+		t.Error("a refused deployment must not be persisted")
 	}
 }

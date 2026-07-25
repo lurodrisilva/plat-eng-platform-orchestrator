@@ -155,6 +155,38 @@ func deriveResourceName(applicationID string) (string, error) {
 	return name, nil
 }
 
+// validateResourceSet checks the one invariant that a single Resource cannot
+// see: that the set is satisfiable.
+//
+// A dependency's name is derived from the application id, so two resources of
+// the same type derive the SAME name. That is not a second database — the
+// building block would render two PostgresInstance objects with one
+// metadata.name, and the application's bind
+// (hex-scaffold.postgres.bindBuildingBlock.instanceName) is a single value that
+// can only reference one of them. The realistic outcome is a billed Azure
+// server the app can never reach.
+//
+// So the ceiling is ONE per type, and it is structural rather than budgetary.
+// resourcePolicy's maxInstancesPerDeployment is a separate, additional ceiling;
+// it cannot raise this one, and it should not be configured above it.
+func validateResourceSet(resources []Resource) error {
+	seen := map[ResourceType]bool{}
+	for _, r := range resources {
+		if r.IsZero() {
+			return fmt.Errorf("a declared resource is empty")
+		}
+		if seen[r.resourceType] {
+			return fmt.Errorf(
+				"more than one %s resource declared: the name is derived from the application id, so a second one "+
+					"would collide with the first rather than provision an additional database, and the application "+
+					"binds exactly one instance",
+				r.resourceType)
+		}
+		seen[r.resourceType] = true
+	}
+	return nil
+}
+
 func contains(haystack []string, needle string) bool {
 	for _, h := range haystack {
 		if h == needle {

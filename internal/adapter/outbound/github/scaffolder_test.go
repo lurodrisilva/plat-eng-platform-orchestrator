@@ -277,3 +277,62 @@ func TestRepoStatus_RejectsBadName(t *testing.T) {
 		t.Fatal("expected validation error for bad name, got nil")
 	}
 }
+
+// dispatchInputs fires a Dispatch against a stub GitHub and returns the
+// workflow_dispatch inputs it sent.
+func dispatchInputs(t *testing.T, req port.ScaffoldRequest) map[string]any {
+	t.Helper()
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/access_tokens") {
+			writeToken(w)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if _, err := newTestScaffolder(t, srv.URL).Dispatch(context.Background(), req); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	inputs, ok := gotBody["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("inputs missing or wrong type: %v", gotBody["inputs"])
+	}
+	return inputs
+}
+
+// The POST /apps passthrough (S4, ADR-0023): the requested database shape
+// becomes the scaffolded repo's default. workflow_dispatch inputs are strings
+// on the wire even for a numeric input, so storage is formatted rather than
+// sent as a number.
+func TestDispatch_PassesTheDeclaredDatabaseShape(t *testing.T) {
+	inputs := dispatchInputs(t, port.ScaffoldRequest{
+		Name: "my-app", Team: "payments", Domain: "account",
+		DBSize: "medium", DBVersion: "15", DBStorageMb: 65536,
+	})
+
+	if inputs["dbSize"] != "medium" {
+		t.Errorf("inputs.dbSize = %v, want medium", inputs["dbSize"])
+	}
+	if inputs["dbVersion"] != "15" {
+		t.Errorf("inputs.dbVersion = %v, want 15", inputs["dbVersion"])
+	}
+	if inputs["dbStorageMb"] != "65536" {
+		t.Errorf("inputs.dbStorageMb = %v (%T), want the string \"65536\"", inputs["dbStorageMb"], inputs["dbStorageMb"])
+	}
+}
+
+// An unset field must be OMITTED, not sent empty. A workflow's `default:` only
+// applies to an input that was not provided at all; sending "" would override
+// the default and the render would write an empty size into the umbrella.
+func TestDispatch_OmitsUnsetDatabaseInputs(t *testing.T) {
+	inputs := dispatchInputs(t, port.ScaffoldRequest{Name: "my-app", Team: "payments", Domain: "account"})
+
+	for _, key := range []string{"dbSize", "dbVersion", "dbStorageMb"} {
+		if v, present := inputs[key]; present {
+			t.Errorf("inputs.%s = %v, want the key absent so the workflow default applies", key, v)
+		}
+	}
+}

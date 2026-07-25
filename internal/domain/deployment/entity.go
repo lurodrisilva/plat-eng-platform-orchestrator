@@ -15,6 +15,7 @@ type Deployment struct {
 	target        Target
 	source        Source
 	values        map[string]any
+	resources     []Resource
 	correlationID string
 
 	status   Status
@@ -62,6 +63,11 @@ type Health struct {
 }
 
 // New creates a new Deployment aggregate. Validates all inputs.
+//
+// resources are the application dependencies the platform provisions alongside
+// the app, as part of the same deploy unit. They are already-validated value
+// objects (see NewResource); what is checked here is the one invariant that
+// only the aggregate can see — that the SET of them is satisfiable.
 func New(
 	applicationID, team string,
 	image Image,
@@ -69,6 +75,7 @@ func New(
 	target Target,
 	source Source,
 	values map[string]any,
+	resources []Resource,
 	correlationID string,
 ) (*Deployment, error) {
 	if applicationID == "" {
@@ -76,6 +83,9 @@ func New(
 	}
 	if team == "" {
 		return nil, fmt.Errorf("new deployment: team is required")
+	}
+	if err := validateResourceSet(resources); err != nil {
+		return nil, fmt.Errorf("new deployment: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -90,6 +100,7 @@ func New(
 		target:        target,
 		source:        source,
 		values:        copyValues(values),
+		resources:     append([]Resource(nil), resources...),
 		correlationID: correlationID,
 		status:        StatusReceived,
 		startedAt:     now,
@@ -108,6 +119,7 @@ func Reconstitute(
 	target Target,
 	source Source,
 	values map[string]any,
+	resources []Resource,
 	correlationID string,
 	status Status,
 	metadata *Metadata,
@@ -126,6 +138,7 @@ func Reconstitute(
 		target:        target,
 		source:        source,
 		values:        values,
+		resources:     resources,
 		correlationID: correlationID,
 		status:        status,
 		metadata:      metadata,
@@ -149,16 +162,27 @@ func (d *Deployment) ChartSource() ChartSource { return d.chartSource }
 func (d *Deployment) Target() Target           { return d.target }
 func (d *Deployment) Source() Source           { return d.source }
 func (d *Deployment) Values() map[string]any   { return copyValues(d.values) }
-func (d *Deployment) CorrelationID() string    { return d.correlationID }
-func (d *Deployment) Status() Status           { return d.status }
-func (d *Deployment) Metadata() *Metadata      { return d.metadata }
-func (d *Deployment) ArtifactInfo() *Artifact  { return d.artifact }
-func (d *Deployment) ArgoApp() *ArgoApp        { return d.argoApp }
-func (d *Deployment) HealthInfo() *Health      { return d.health }
-func (d *Deployment) Error() string            { return d.errMsg }
-func (d *Deployment) StartedAt() time.Time     { return d.startedAt }
-func (d *Deployment) CompletedAt() time.Time   { return d.completedAt }
-func (d *Deployment) UpdatedAt() time.Time     { return d.updatedAt }
+
+// Resources returns the declared application dependencies. Resource is an
+// immutable value object, so a copy of the slice is enough to stop a caller
+// mutating the aggregate's set.
+func (d *Deployment) Resources() []Resource {
+	if d.resources == nil {
+		return nil
+	}
+	return append([]Resource(nil), d.resources...)
+}
+
+func (d *Deployment) CorrelationID() string   { return d.correlationID }
+func (d *Deployment) Status() Status          { return d.status }
+func (d *Deployment) Metadata() *Metadata     { return d.metadata }
+func (d *Deployment) ArtifactInfo() *Artifact { return d.artifact }
+func (d *Deployment) ArgoApp() *ArgoApp       { return d.argoApp }
+func (d *Deployment) HealthInfo() *Health     { return d.health }
+func (d *Deployment) Error() string           { return d.errMsg }
+func (d *Deployment) StartedAt() time.Time    { return d.startedAt }
+func (d *Deployment) CompletedAt() time.Time  { return d.completedAt }
+func (d *Deployment) UpdatedAt() time.Time    { return d.updatedAt }
 func (d *Deployment) DurationMs() int64 {
 	if d.completedAt.IsZero() {
 		return 0

@@ -126,6 +126,11 @@ func run() error {
 	// policies config; reject overrides of platform-locked knobs at the API
 	// boundary in enforce mode, observe-only in audit mode.
 	var allowlist port.TunableAllowlist
+	// J3 resource policy (ADR-0023): governs the application dependencies a
+	// request may declare. Left nil when no policies file is configured, and
+	// nil REFUSES a request declaring resources rather than skipping the gate —
+	// an unconfigured gate must not be a free pass when what it gates is spend.
+	var resourcePolicy port.ResourcePolicyEvaluator
 	if cfg.Policies.ConfigPath != "" {
 		al, err := policy.LoadTunableAllowlist(cfg.Policies.ConfigPath)
 		if err != nil {
@@ -135,13 +140,25 @@ func run() error {
 		logger.Info("tunable allowlist loaded",
 			slog.String("mode", al.Mode()),
 			slog.String("path", cfg.Policies.ConfigPath))
+
+		rp, err := policy.LoadResourcePolicy(cfg.Policies.ConfigPath)
+		if err != nil {
+			return fmt.Errorf("load resource policy: %w", err)
+		}
+		resourcePolicy = rp
+		// Log configured=false at startup so an absent resourcePolicy section is
+		// visible here rather than diagnosed from a refused deployment later.
+		logger.Info("resource policy loaded",
+			slog.String("mode", rp.Mode()),
+			slog.Bool("configured", rp.Configured()),
+			slog.String("path", cfg.Policies.ConfigPath))
 	}
 
 	// Application use cases.
 	// Branch/env PolicyEvaluator adapter is still a gap (nil = no gate).
 	app := deploymentapp.Application{
 		Commands: deploymentapp.Commands{
-			CreateDeployment: deploymentapp.NewCreateDeploymentHandler(deploymentRepo, nil, allowlist, logger),
+			CreateDeployment: deploymentapp.NewCreateDeploymentHandler(deploymentRepo, nil, allowlist, resourcePolicy, logger),
 		},
 		Queries: deploymentapp.Queries{
 			GetDeployment: deploymentapp.NewGetDeploymentHandler(deploymentRepo),
@@ -192,7 +209,7 @@ func run() error {
 
 	// HTTP handler + router
 	deploymentHandler := handler.NewDeployment(app, validator, allowlist, logger)
-	appsHandler := handler.NewApps(appsScaffolder, validator, logger)
+	appsHandler := handler.NewApps(appsScaffolder, validator, resourcePolicy, logger)
 	router := httpadapter.NewRouter(deploymentHandler, appsHandler, logger)
 
 	srv := &http.Server{

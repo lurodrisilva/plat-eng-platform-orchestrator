@@ -96,15 +96,24 @@ resourcePolicy:
       maxStorageMb: 32768
       maxInstancesPerDeployment: 1
   environments:
-    # Developers iterate here, so a wider size/version window and a second
-    # instance — still bounded, because every one of them bills.
+    # Developers iterate here, so a wider size/version window — still bounded,
+    # because every database bills.
+    #
+    # maxInstancesPerDeployment is 1 and CANNOT usefully be raised. The spec
+    # originally proposed 2 for development; that is unimplementable. A
+    # dependency's name is derived from the application id, so a second postgres
+    # derives the SAME name — the building block would render two
+    # PostgresInstance objects with one metadata.name, and the app's bind
+    # (bindBuildingBlock.instanceName) is a single value that can reference only
+    # one. The ceiling here is a policy limit; the real limit is structural and
+    # the domain refuses the second resource regardless of what this says.
     development:
       allowedTypes: [postgres]
       postgres:
         allowedSizes: [small, medium]
         allowedVersions: ["15", "16"]
         maxStorageMb: 131072
-        maxInstancesPerDeployment: 2
+        maxInstancesPerDeployment: 1
     # DENY. Under azure-flexibleserver the app authenticates as the server
     # ADMIN — the provider generates that credential and the app binds straight
     # to it. ADR-0010 ratified the engine as dev/non-production ONLY until the

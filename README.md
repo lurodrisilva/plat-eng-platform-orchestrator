@@ -109,6 +109,9 @@ Idempotency-Key: payment-service-staging-abc123-987-1
     "appProject": "payments-staging"
   },
   "values": { "replicaCount": 3 },
+  "resources": [
+    { "type": "postgres", "size": "small", "version": "16", "storageMb": 32768 }
+  ],
   "source": {
     "gitSha": "abc123def456...",
     "gitRef": "refs/heads/main",
@@ -120,6 +123,24 @@ Idempotency-Key: payment-service-staging-abc123-987-1
   "correlationId": "ci-2026-05-19-001"
 }
 ```
+
+`resources` declares the application dependencies to provision alongside the app, as part of
+the same deploy unit (ADR-0023). Notes that matter:
+
+- **`resources[].name` is not accepted.** The name is derived from `application.id`, so the
+  `PostgresInstance` XR, the Azure server and the app's bind cannot disagree about which
+  database the app uses. A `name` sent anyway is ignored and logged.
+- **It bills.** Each entry is a real Azure Database for PostgreSQL Flexible Server, and
+  `size: small` maps to `GP_Standard_D2s_v3` — a General Purpose SKU.
+- **It is governed server-side**, per environment, by `resourcePolicy` in the policies file.
+  Unlike the tunable allowlist, that policy is enforce-first: a refusal is `422
+  RESOURCE_NOT_ALLOWED`, never logged-and-allowed. **Production denies `postgres`** (ADR-0010).
+- **`values.sqldatabase.*` and `values['hex-scaffold'].postgres.bindBuildingBlock.*` are
+  reserved** and refused outright — they are the chart shape the platform writes, and reaching
+  them from the overlay would provision infrastructure with no policy evaluation.
+
+The same field is accepted by `POST /api/v1/apps`, where it sets the scaffolded repository's
+default database shape.
 
 Response `202 Accepted`:
 
