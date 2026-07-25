@@ -268,7 +268,7 @@ func TestAuthorizeResources_PassesTheShapeNotTheName(t *testing.T) {
 // directly. Left reachable, a caller could provision a billed Azure server with
 // no resourcePolicy evaluation at all — and the tunable allowlist ships
 // audit-first, so it would log the violation and allow it.
-func TestReservedOverrides(t *testing.T) {
+func TestReservedValueOverrides(t *testing.T) {
 	tests := []struct {
 		name   string
 		values map[string]any
@@ -310,7 +310,7 @@ func TestReservedOverrides(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := reservedOverrides(tc.values); !reflect.DeepEqual(got, tc.want) {
+			if got := ReservedValueOverrides(tc.values); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("reservedOverrides = %v, want %v", got, tc.want)
 			}
 		})

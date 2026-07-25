@@ -17,11 +17,18 @@ headers {
 # Dry-run of a values overlay that mixes an allowlisted knob (replicaCount)
 # with a platform-locked one (securityContext.runAsNonRoot, guardrail G4).
 # Always 200; `blocked` reflects enforce mode; `violations` names the locked key.
+#
+# Both keys are scoped to the umbrella's `hex-scaffold` subchart alias (S7). The
+# umbrella has no ROOT replicaCount or securityContext, so a root-scoped overlay
+# would reach no template at all — and after S7 it reads as a violation rather
+# than being silently accepted.
 body:json {
   {
     "values": {
-      "replicaCount": 3,
-      "securityContext": { "runAsNonRoot": false }
+      "hex-scaffold": {
+        "replicaCount": 3,
+        "securityContext": { "runAsNonRoot": false }
+      }
     }
   }
 }
@@ -41,12 +48,12 @@ tests {
 
   test("the locked knob is reported as a violation", function() {
     const body = res.getBody();
-    expect(body.violations).to.include("securityContext.runAsNonRoot");
+    expect(body.violations).to.include("hex-scaffold.securityContext.runAsNonRoot");
   });
 
-  test("allowlisted replicaCount is NOT a violation", function() {
+  test("allowlisted hex-scaffold.replicaCount is NOT a violation", function() {
     const body = res.getBody();
-    expect(body.violations).to.not.include("replicaCount");
+    expect(body.violations).to.not.include("hex-scaffold.replicaCount");
   });
 
   test("blocked iff enforce mode", function() {

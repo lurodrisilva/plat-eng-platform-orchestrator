@@ -36,34 +36,65 @@ freezeWindows: []
 #                   developers can iterate freely off-road-adjacent.
 # Locked by omission everywhere: securityContext/podSecurityContext (G4),
 # image (G1/G2), ownership+cost labels (G6), serviceAccount/workload-identity (G7).
+#
+# EVERY KEY IS PREFIXED `hex-scaffold.` AND THAT IS NOT COSMETIC (S7, defect D3).
+# The deploy unit is the UMBRELLA (ADR-0008), and the application is a subchart
+# aliased `hex-scaffold` in its Chart.yaml. The umbrella has no root
+# `replicaCount` or `resources` key at all, so a root-scoped override is
+# discarded by Helm before it reaches a template — it renders nothing and errors
+# nowhere. Root-scoped entries here meant the allowlist was validating paths the
+# chart never reads: validation agreed with a render that never happened.
+#
+# Every key below existed at the root before and exists under the alias now; the
+# set of tunable knobs is unchanged, only the address is corrected. Verified
+# against hex-scaffold 0.3.0's values.yaml — replicaCount:305, resources:306,
+# autoscaling:314, env:39, nodeSelector:375.
+#
+# ROLLOUT ORDER MATTERS. The portal still emits ROOT-scoped keys until slice S6,
+# so after this change its overlays read as violations. `mode: audit` is what
+# makes that safe: they are logged, not blocked, and they were already being
+# silently discarded by Helm — so nothing gets worse, and the audit log becomes
+# the detector for D3 rather than a silent failure. Do NOT flip to enforce until
+# S6 has landed, or every knob the wizard collects becomes a 422.
+#
+# Deliberately still locked, and worth naming so the omission reads as a
+# decision: `hex-scaffold.autoscaling.targetMemoryUtilizationPercentage` sits in
+# the same block as the CPU target but is not tunable. Widening the set is a
+# governance change, not a re-key, so it is not made here.
+#
+# Do NOT add a bare `hex-scaffold` entry. Allowlist matching is prefix-based, so
+# one blanket entry would make the whole subchart tunable — including
+# `hex-scaffold.postgres.bindBuildingBlock`, which decides which database's
+# credentials the app reads. That path is reserved and refused at the create
+# boundary regardless of this file (ADR-0023), but the two must not disagree.
 tunableAllowlist:
   mode: audit
   default:
     allowedKeys:
-      - replicaCount
-      - resources.requests.cpu
-      - resources.requests.memory
-      - resources.limits.cpu
-      - resources.limits.memory
-      - autoscaling.minReplicas
-      - autoscaling.maxReplicas
-      - autoscaling.targetCPUUtilizationPercentage
+      - hex-scaffold.replicaCount
+      - hex-scaffold.resources.requests.cpu
+      - hex-scaffold.resources.requests.memory
+      - hex-scaffold.resources.limits.cpu
+      - hex-scaffold.resources.limits.memory
+      - hex-scaffold.autoscaling.minReplicas
+      - hex-scaffold.autoscaling.maxReplicas
+      - hex-scaffold.autoscaling.targetCPUUtilizationPercentage
   environments:
     production:
       allowedKeys:
-        - resources.requests.cpu
-        - resources.requests.memory
+        - hex-scaffold.resources.requests.cpu
+        - hex-scaffold.resources.requests.memory
     development:
       allowedKeys:
-        - resources.requests.cpu
-        - resources.requests.memory
-        - resources.limits.cpu
-        - resources.limits.memory
-        - autoscaling.minReplicas
-        - autoscaling.maxReplicas
-        - autoscaling.targetCPUUtilizationPercentage
-        - env
-        - nodeSelector
+        - hex-scaffold.resources.requests.cpu
+        - hex-scaffold.resources.requests.memory
+        - hex-scaffold.resources.limits.cpu
+        - hex-scaffold.resources.limits.memory
+        - hex-scaffold.autoscaling.minReplicas
+        - hex-scaffold.autoscaling.maxReplicas
+        - hex-scaffold.autoscaling.targetCPUUtilizationPercentage
+        - hex-scaffold.env
+        - hex-scaffold.nodeSelector
 
 # J3 resource policy (application dependencies — ADR-0023). Governs the
 # `resources[]` a create/deploy request may declare: which types, and within a

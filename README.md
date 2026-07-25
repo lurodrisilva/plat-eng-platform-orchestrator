@@ -108,7 +108,7 @@ Idempotency-Key: payment-service-staging-abc123-987-1
     "namespace": "payments",
     "appProject": "payments-staging"
   },
-  "values": { "replicaCount": 3 },
+  "values": { "hex-scaffold": { "replicaCount": 3 } },
   "resources": [
     { "type": "postgres", "size": "small", "version": "16", "storageMb": 32768 }
   ],
@@ -123,6 +123,12 @@ Idempotency-Key: payment-service-staging-abc123-987-1
   "correlationId": "ci-2026-05-19-001"
 }
 ```
+
+**`values` is umbrella-relative, so app knobs are scoped to the `hex-scaffold` subchart alias.**
+The deploy unit is the umbrella (ADR-0008) and the application is a subchart within it; the
+umbrella has no root `replicaCount` or `resources` key, so a root-scoped override reaches no
+template — it renders nothing and errors nowhere. The tunable allowlist names the same
+alias-scoped paths, so validation and render finally agree.
 
 `resources` declares the application dependencies to provision alongside the app, as part of
 the same deploy unit (ADR-0023). Notes that matter:

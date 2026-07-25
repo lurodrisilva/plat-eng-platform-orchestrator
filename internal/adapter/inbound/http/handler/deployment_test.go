@@ -278,3 +278,62 @@ func TestCreate_RefusedResourceReturns422ResourceNotAllowed(t *testing.T) {
 		t.Error("a refused deployment must not be persisted")
 	}
 }
+
+// --- the dry-run must agree with the create boundary (S7) --------------------
+
+// After ADR-0023 reserved `sqldatabase.*`, the validate endpoint answered
+// "not blocked" for an overlay that create refuses outright. A dry-run that
+// disagrees with create is worse than no dry-run: the portal would offer a
+// Deploy button for a request that cannot succeed. Reserved paths are refused
+// regardless of allowlist mode, so audit mode must NOT soften this one.
+func TestValidateTunables_ReservedPathIsBlockedEvenInAuditMode(t *testing.T) {
+	h := newValidateHandler(t, "audit")
+
+	rr, resp := postValidate(t, h, `{"environment":"development","values":{"sqldatabase":{"enabled":true}}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if resp.Mode != "audit" {
+		t.Fatalf("mode = %q, want audit", resp.Mode)
+	}
+	if !resp.Blocked {
+		t.Error("a reserved path is refused at create regardless of mode; the dry-run must say so")
+	}
+	if len(resp.Violations) == 0 || resp.Violations[0] != "sqldatabase" {
+		t.Errorf("violations = %v, want the reserved path reported first", resp.Violations)
+	}
+}
+
+// The app's bind is the other reserved half — it decides which database's
+// credentials the pod reads.
+func TestValidateTunables_ReservedBindPathIsBlocked(t *testing.T) {
+	h := newValidateHandler(t, "audit")
+
+	_, resp := postValidate(t, h, `{"environment":"development","values":{"hex-scaffold":{"postgres":{"bindBuildingBlock":{"instanceName":"someone-elses-db"}}}}}`)
+	if !resp.Blocked {
+		t.Error("the bind is platform-owned and must be reported as blocked")
+	}
+	found := false
+	for _, v := range resp.Violations {
+		if v == "hex-scaffold.postgres.bindBuildingBlock" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("violations = %v, want the bind path named", resp.Violations)
+	}
+}
+
+// A clean overlay stays clean — the reserved check must not add noise to the
+// common case.
+func TestValidateTunables_CleanOverlayIsNotBlockedByTheReservedCheck(t *testing.T) {
+	h := newValidateHandler(t, "enforce")
+
+	_, resp := postValidate(t, h, `{"environment":"development","values":{"replicaCount":3}}`)
+	if resp.Blocked {
+		t.Errorf("an allowlisted overlay must not be blocked: %v", resp.Violations)
+	}
+	if len(resp.Violations) != 0 {
+		t.Errorf("violations = %v, want none", resp.Violations)
+	}
+}
