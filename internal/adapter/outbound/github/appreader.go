@@ -89,27 +89,16 @@ func (s *Scaffolder) ReadUmbrellaChart(ctx context.Context, repo string) (port.U
 	return port.UmbrellaChart{ChartName: chrt.Name, AppValuesKey: appValuesKey(chrt)}, nil
 }
 
-// appValuesKey picks the values key the application subchart hangs under.
-//
-// The application is the umbrella's LOCAL dependency: it ships inside the app
-// repository and is referenced as `file://../helm/<app>`, while every building
-// block resolves from an OCI registry. That distinction is the identification —
-// it holds whatever the app is called, whereas matching on a name would need the
-// app's identity, which is the thing being looked up.
-//
-// Helm keys a subchart's values by its alias when it has one and by its chart
-// name otherwise, so the same rule is applied here.
+// appValuesKey maps this adapter's parsed Chart.yaml onto the shared rule in the
+// port package. The rule lives there because the OCI resolver applies it too,
+// from helm's own metadata — two copies would drift, and a disagreement about
+// which subchart is the application is silent by nature.
 func appValuesKey(chrt chartYAML) string {
+	deps := make([]port.ChartDependency, 0, len(chrt.Dependencies))
 	for _, d := range chrt.Dependencies {
-		if !strings.HasPrefix(d.Repository, "file://") {
-			continue
-		}
-		if d.Alias != "" {
-			return d.Alias
-		}
-		return d.Name
+		deps = append(deps, port.ChartDependency{Name: d.Name, Alias: d.Alias, Repository: d.Repository})
 	}
-	return ""
+	return port.AppValuesKeyOf(deps)
 }
 
 func dropWhitespace(r rune) rune {

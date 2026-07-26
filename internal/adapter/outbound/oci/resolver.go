@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/registry"
 
 	"github.com/myorg/platform-orchestrator/internal/application/port"
@@ -88,13 +91,43 @@ func (r *Resolver) Resolve(ctx context.Context, repository, name, constraint str
 		slog.String("digest", digest),
 	)
 
+	// The application subchart's values key, read from the chart we just pulled.
+	// A parse failure here is not fatal: the archive is still deployable, and the
+	// one caller that needs the key refuses on its own when it is empty rather
+	// than composing values it cannot address.
+	appValuesKey := ""
+	if chrt, err := loader.LoadArchive(bytes.NewReader(pulled.Chart.Data)); err == nil {
+		appValuesKey = appValuesKeyOf(chrt)
+	} else {
+		r.logger.WarnContext(ctx, "could not read the resolved chart's dependencies",
+			slog.String("repository", repoRef), slog.String("error", err.Error()))
+	}
+
 	return port.ResolvedChart{
 		SourceRepository: repository,
 		ChartName:        name,
 		ResolvedVersion:  chosen,
 		ResolvedTag:      chosen,
 		ArchiveBytes:     pulled.Chart.Data,
+		AppValuesKey:     appValuesKey,
 	}, nil
+}
+
+// appValuesKeyOf maps helm's dependency metadata onto the shared rule in the
+// port package, so this adapter and the GitHub one cannot disagree about which
+// subchart is the application.
+func appValuesKeyOf(chrt *chart.Chart) string {
+	if chrt == nil || chrt.Metadata == nil {
+		return ""
+	}
+	deps := make([]port.ChartDependency, 0, len(chrt.Metadata.Dependencies))
+	for _, d := range chrt.Metadata.Dependencies {
+		if d == nil {
+			continue
+		}
+		deps = append(deps, port.ChartDependency{Name: d.Name, Alias: d.Alias, Repository: d.Repository})
+	}
+	return port.AppValuesKeyOf(deps)
 }
 
 // selectVersion picks the highest tag satisfying constraint. An empty or "*"

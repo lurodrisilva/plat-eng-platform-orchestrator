@@ -174,6 +174,9 @@ func (h *DeployExecutionHandler) run(ctx context.Context, d *deployment.Deployme
 
 	// Lazily resolve the umbrella; needed for compose and to stamp the version.
 	var archive []byte
+	// appValuesKey comes from the resolved chart, so platform values address the
+	// application subchart by the name it actually has rather than the template's.
+	var appValuesKey string
 	ensureArchive := func() error {
 		if archive != nil {
 			return nil
@@ -184,6 +187,7 @@ func (h *DeployExecutionHandler) run(ctx context.Context, d *deployment.Deployme
 			return fmt.Errorf("resolve chart: %w", err)
 		}
 		archive = resolved.ArchiveBytes
+		appValuesKey = resolved.AppValuesKey
 		// Stamp the deployment version now the resolved chart version is known.
 		md := *d.Metadata()
 		md.DeploymentVersion = deployment.NewDeploymentVersion(resolved.ResolvedVersion, d.Source().ShortSHA(), d.StartedAt())
@@ -207,7 +211,11 @@ func (h *DeployExecutionHandler) run(ctx context.Context, d *deployment.Deployme
 			return err
 		}
 		version := d.Metadata().DeploymentVersion.String()
-		composed, err := h.composer.Compose(ctx, archive, d.Values(), platformValues(d), version, d.Source().ShortSHA(), annotations(d))
+		pv, err := platformValues(d, appValuesKey)
+		if err != nil {
+			return fmt.Errorf("compose chart: %w", err)
+		}
+		composed, err := h.composer.Compose(ctx, archive, d.Values(), pv, version, d.Source().ShortSHA(), annotations(d))
 		if err != nil {
 			return fmt.Errorf("compose chart: %w", err)
 		}
@@ -410,10 +418,36 @@ func baseMetadata(d *deployment.Deployment) deployment.Metadata {
 // from the caller: the composer merges defaults < user < platform, so these keys
 // cannot be reached from the request's `values` overlay, and the create boundary
 // additionally refuses an overlay that tries (see reservedValuePaths).
-func platformValues(d *deployment.Deployment) map[string]any {
+//
+// appValuesKey is the umbrella key the application subchart hangs under, taken
+// from the RESOLVED CHART rather than assumed. It used to be the literal
+// `hex-scaffold`, which is the template's name and no scaffolded app's: the
+// scaffolder substitutes that token for the app's own when it renders. Helm
+// discards values written under a key no subchart claims — without an error, a
+// warning, or a diff — so the effect was that the platform renamed the database
+// XR through the stable `sqldatabase` alias while the application's bind to it
+// silently kept whatever the repository had baked in. The two agreed only
+// because both usually derive from the same app name; an `application.id` that
+// differs from the scaffolded app's name made them disagree, and ADR-0023's
+// decision 2 claims no input can do that.
+//
+// Verified by rendering a real scaffold: `--set
+// hex-scaffold.postgres.bindBuildingBlock.instanceName=X` left the bind on the
+// repository's value, while the same set under the app's own key moved it.
+//
+// An empty appValuesKey therefore REFUSES rather than guesses. Composing the
+// database without a bind we can address is the silent disagreement this exists
+// to prevent, so it returns an error and fails the deployment instead.
+func platformValues(d *deployment.Deployment, appValuesKey string) (map[string]any, error) {
 	resources := d.Resources()
 	if len(resources) == 0 {
-		return nil
+		return nil, nil
+	}
+	if appValuesKey == "" {
+		return nil, fmt.Errorf(
+			"cannot determine the application subchart's values key from chart %q, so the database bind cannot be addressed; "+
+				"the umbrella must declare the application as a file:// dependency",
+			d.ChartSource().Name())
 	}
 
 	var sqlDatabases []any
@@ -432,7 +466,7 @@ func platformValues(d *deployment.Deployment) map[string]any {
 		})
 	}
 	if len(sqlDatabases) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// The umbrella's SQL building block, aliased `sqldatabase` in its Chart.yaml.
@@ -465,9 +499,9 @@ func platformValues(d *deployment.Deployment) map[string]any {
 	// from the net-hexagonal template, and the template's subchart is named
 	// hex-scaffold whatever the app scaffolded from it is called.
 	if bind := bindValues(resources); bind != nil {
-		vals["hex-scaffold"] = bind
+		vals[appValuesKey] = bind
 	}
-	return vals
+	return vals, nil
 }
 
 // bindValues builds the application's bind to the composed connection Secrets.

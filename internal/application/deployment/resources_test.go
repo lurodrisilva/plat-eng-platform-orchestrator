@@ -76,12 +76,83 @@ func mustPostgres(t *testing.T, appID, size, version string, storageMb int) depl
 
 // --- the translator ----------------------------------------------------------
 
+// appKey is a SCAFFOLDED app's subchart key. Deliberately not `hex-scaffold`:
+// that is the template's name, and the scaffolder substitutes it for the app's
+// own when it renders, so every test asserting the literal was asserting the one
+// case that does not occur in production.
+const appKey = "orders-v3"
+
+// The bind must land under the app's OWN subchart key and nowhere else.
+//
+// Proven against a real scaffolded render before being fixed here: `helm
+// template --set hex-scaffold.postgres.bindBuildingBlock.instanceName=X` left
+// the rendered Secret refs on the repository's value, because Helm discards
+// values addressed to a subchart that does not exist — silently. Meanwhile the
+// XR name DID change, since `sqldatabase` is a real alias that survives the
+// rename. So the platform renamed the database and failed to move the app onto
+// it, and nothing anywhere reported a problem.
+func TestPlatformValues_BindLandsUnderTheAppsOwnKeyOnly(t *testing.T) {
+	d := testDeployment(t, appKey, "payments", "development",
+		[]deployment.Resource{mustPostgres(t, appKey, "small", "16", 32768)})
+
+	vals, err := platformValues(d, appKey)
+	if err != nil {
+		t.Fatalf("platformValues: %v", err)
+	}
+	if _, wrong := vals["hex-scaffold"]; wrong {
+		t.Errorf("bind written under the template's key; Helm would discard it: %#v", vals)
+	}
+	bind, ok := vals[appKey].(map[string]any)
+	if !ok {
+		t.Fatalf("no values under the app's subchart key %q: %#v", appKey, vals)
+	}
+	got := bind["postgres"].(map[string]any)["bindBuildingBlock"].(map[string]any)["instanceName"]
+	if got != appKey {
+		t.Errorf("instanceName = %v, want %q", got, appKey)
+	}
+}
+
+// With resources declared and no key to address, composing would provision a
+// database the app is not bound to. Refuse instead: this is the same fail-closed
+// rule the resource policy follows, for the same reason — the alternative costs
+// money and looks green.
+func TestPlatformValues_UnknownAppKeyWithResourcesRefuses(t *testing.T) {
+	d := testDeployment(t, appKey, "payments", "development",
+		[]deployment.Resource{mustPostgres(t, appKey, "small", "16", 32768)})
+
+	vals, err := platformValues(d, "")
+	if err == nil {
+		t.Fatalf("platformValues succeeded with no subchart key: %#v", vals)
+	}
+	if vals != nil {
+		t.Errorf("values returned alongside an error: %#v", vals)
+	}
+}
+
+// ...but a deployment declaring nothing is unaffected. The gate costs nothing
+// until someone asks the platform to spend money, so charts whose shape we
+// cannot read still deploy as long as they ask for no dependencies.
+func TestPlatformValues_UnknownAppKeyWithoutResourcesIsFine(t *testing.T) {
+	d := testDeployment(t, appKey, "payments", "development", nil)
+	vals, err := platformValues(d, "")
+	if err != nil {
+		t.Fatalf("platformValues errored for a deployment with no resources: %v", err)
+	}
+	if vals != nil {
+		t.Errorf("platformValues = %#v, want nil", vals)
+	}
+}
+
 // A deployment declaring no resources must be byte-for-byte what it was before
 // this feature existed. nil, not an empty map: an empty map would still merge
 // and could shift the composed values.yaml for every deployment that predates
 // declared dependencies.
 func TestPlatformValues_NoResourcesEmitsNil(t *testing.T) {
-	if got := platformValues(testDeployment(t, "orders-v3", "payments", "development", nil)); got != nil {
+	got, err := platformValues(testDeployment(t, "orders-v3", "payments", "development", nil), "orders-v3")
+	if err != nil {
+		t.Fatalf("platformValues: %v", err)
+	}
+	if got != nil {
 		t.Errorf("platformValues = %#v, want nil", got)
 	}
 }
@@ -113,7 +184,7 @@ func TestPlatformValues_OnePostgresEmitsTheExactChartShape(t *testing.T) {
 				},
 			},
 		},
-		"hex-scaffold": map[string]any{
+		appKey: map[string]any{
 			"postgres": map[string]any{
 				"bindBuildingBlock": map[string]any{
 					"enabled":      true,
@@ -123,7 +194,10 @@ func TestPlatformValues_OnePostgresEmitsTheExactChartShape(t *testing.T) {
 		},
 	}
 
-	got := platformValues(d)
+	got, err := platformValues(d, appKey)
+	if err != nil {
+		t.Fatalf("platformValues: %v", err)
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("platformValues mismatch\n got: %#v\nwant: %#v", got, want)
 	}
@@ -135,11 +209,14 @@ func TestPlatformValues_OnePostgresEmitsTheExactChartShape(t *testing.T) {
 func TestPlatformValues_XRNameAndBindAreTheSameValue(t *testing.T) {
 	d := testDeployment(t, "orders-v3", "payments", "development",
 		[]deployment.Resource{mustPostgres(t, "orders-v3", "", "", 0)})
-	vals := platformValues(d)
+	vals, err := platformValues(d, appKey)
+	if err != nil {
+		t.Fatalf("platformValues: %v", err)
+	}
 
 	sql := vals["sqldatabase"].(map[string]any)["databases"].(map[string]any)["sql"].([]any)
 	xrName := sql[0].(map[string]any)["name"]
-	bind := vals["hex-scaffold"].(map[string]any)["postgres"].(map[string]any)["bindBuildingBlock"].(map[string]any)
+	bind := vals[appKey].(map[string]any)["postgres"].(map[string]any)["bindBuildingBlock"].(map[string]any)
 
 	if xrName != bind["instanceName"] {
 		t.Fatalf("XR name %v != bind instanceName %v", xrName, bind["instanceName"])
@@ -154,7 +231,11 @@ func TestPlatformValues_XRNameAndBindAreTheSameValue(t *testing.T) {
 func TestPlatformValues_DefaultsReachTheChart(t *testing.T) {
 	d := testDeployment(t, "orders", "payments", "development",
 		[]deployment.Resource{mustPostgres(t, "orders", "", "", 0)})
-	entry := platformValues(d)["sqldatabase"].(map[string]any)["databases"].(map[string]any)["sql"].([]any)[0].(map[string]any)
+	pv, err := platformValues(d, "orders")
+	if err != nil {
+		t.Fatalf("platformValues: %v", err)
+	}
+	entry := pv["sqldatabase"].(map[string]any)["databases"].(map[string]any)["sql"].([]any)[0].(map[string]any)
 	azure := entry["azureFlexibleServer"].(map[string]any)
 
 	if azure["size"] != deployment.DefaultPostgresSize ||
@@ -306,6 +387,32 @@ func TestReservedValueOverrides(t *testing.T) {
 				},
 			},
 			[]string{"sqldatabase", "hex-scaffold.postgres.bindBuildingBlock"},
+		},
+		{
+			// The guard must not depend on the subchart's NAME. A scaffolded app's
+			// subchart is called after the app, so a check written against the
+			// literal `hex-scaffold` protected the template umbrella and left every
+			// app built from it able to point itself at another team's database.
+			"a scaffolded app's bind, under its own subchart key",
+			map[string]any{appKey: map[string]any{
+				"postgres": map[string]any{"bindBuildingBlock": map[string]any{"instanceName": "someone-elses-db"}},
+			}},
+			[]string{appKey + ".postgres.bindBuildingBlock"},
+		},
+		{
+			"a legitimate knob under the app's own key is untouched",
+			map[string]any{appKey: map[string]any{"replicaCount": 3}},
+			nil,
+		},
+		{
+			// Stable ordering: subchart keys are walked in sorted order, so two
+			// identical refusals report identically.
+			"two subcharts both reaching for a bind",
+			map[string]any{
+				"zzz-app": map[string]any{"postgres": map[string]any{"bindBuildingBlock": map[string]any{"enabled": true}}},
+				"aaa-app": map[string]any{"postgres": map[string]any{"bindBuildingBlock": map[string]any{"enabled": true}}},
+			},
+			[]string{"aaa-app.postgres.bindBuildingBlock", "zzz-app.postgres.bindBuildingBlock"},
 		},
 	}
 	for _, tc := range tests {
