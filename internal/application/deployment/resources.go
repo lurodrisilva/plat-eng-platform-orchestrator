@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/myorg/platform-orchestrator/internal/application/port"
@@ -21,13 +22,28 @@ import (
 // server with nothing having authorized it — and the tunable allowlist ships
 // audit-first, so it would log the violation and allow it.
 //
-// `hex-scaffold.postgres.bindBuildingBlock` is the other half: it decides which
-// Secrets the app reads its credentials from. Letting a caller set it
+// The application's `postgres.bindBuildingBlock` is the other half: it decides
+// which Secrets the app reads its credentials from. Letting a caller set it
 // independently of the XR reintroduces exactly the disagreement between an app
-// and its database that ADR-0023 exists to make impossible.
+// and its database that ADR-0023 exists to make impossible. It is not listed
+// here because it is not addressable by a fixed path — see
+// reservedSubchartPaths.
 var reservedValuePaths = []string{
 	"sqldatabase",
-	"hex-scaffold.postgres.bindBuildingBlock",
+}
+
+// reservedSubchartPaths are reserved UNDER ANY top-level values key, because the
+// key belongs to the application subchart and its name is not knowable here.
+//
+// The create boundary sees only the request: no chart has been resolved, so
+// there is nothing to ask what the application subchart is called. And it is not
+// a constant — the scaffolder renames `hex-scaffold` to the app's own name, so a
+// guard written against the literal protected the template umbrella and nothing
+// built from it. Matching the suffix under every top-level key protects whatever
+// the subchart is called, which is the property actually wanted: nobody may
+// choose which database's credentials an application reads.
+var reservedSubchartPaths = []string{
+	"postgres.bindBuildingBlock",
 }
 
 // ReservedValueOverrides returns the reserved paths a values overlay tries to
@@ -44,6 +60,24 @@ func ReservedValueOverrides(values map[string]any) []string {
 	for _, path := range reservedValuePaths {
 		if valuesHavePath(values, strings.Split(path, ".")) {
 			hit = append(hit, path)
+		}
+	}
+	// Sorted so the reported violations are stable: map iteration order is
+	// randomised, and a caller diffing two identical refusals should not see them
+	// differ.
+	subcharts := make([]string, 0, len(values))
+	for key := range values {
+		subcharts = append(subcharts, key)
+	}
+	sort.Strings(subcharts)
+	for _, key := range subcharts {
+		if key == "sqldatabase" {
+			continue // already reported as a whole reserved block
+		}
+		for _, suffix := range reservedSubchartPaths {
+			if valuesHavePath(values, append([]string{key}, strings.Split(suffix, ".")...)) {
+				hit = append(hit, key+"."+suffix)
+			}
 		}
 	}
 	return hit
