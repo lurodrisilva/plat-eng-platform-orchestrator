@@ -37,64 +37,77 @@ freezeWindows: []
 # Locked by omission everywhere: securityContext/podSecurityContext (G4),
 # image (G1/G2), ownership+cost labels (G6), serviceAccount/workload-identity (G7).
 #
-# EVERY KEY IS PREFIXED `hex-scaffold.` AND THAT IS NOT COSMETIC (S7, defect D3).
+# EVERY KEY IS PREFIXED `app.` AND THAT IS NOT COSMETIC (S7, defect D3).
 # The deploy unit is the UMBRELLA (ADR-0008), and the application is a subchart
-# aliased `hex-scaffold` in its Chart.yaml. The umbrella has no root
-# `replicaCount` or `resources` key at all, so a root-scoped override is
-# discarded by Helm before it reaches a template — it renders nothing and errors
-# nowhere. Root-scoped entries here meant the allowlist was validating paths the
-# chart never reads: validation agreed with a render that never happened.
+# inside it. The umbrella has no root `replicaCount` or `resources` key at all,
+# so a root-scoped override is discarded by Helm before it reaches a template —
+# it renders nothing and errors nowhere. Root-scoped entries here meant the
+# allowlist was validating paths the chart never reads: validation agreed with a
+# render that never happened.
 #
-# Every key below existed at the root before and exists under the alias now; the
-# set of tunable knobs is unchanged, only the address is corrected. Verified
-# against hex-scaffold 0.3.0's values.yaml — replicaCount:305, resources:306,
-# autoscaling:314, env:39, nodeSelector:375.
+# `app` IS AN ALIAS, NOT A CHART NAME, and that distinction is the whole reason
+# these keys can be static. S7 first prefixed them `hex-scaffold.`, which is the
+# TEMPLATE's subchart name — and the scaffolder rewrites that name, so a
+# scaffolded app's values live under `orders-v3:`. The keys therefore matched
+# this platform's own template chart and no application built from it. Since
+# this file is static configuration it cannot enumerate the names of apps that
+# do not exist yet, so re-keying was not available a second time: net-hexagonal
+# 0.4.0 aliases the subchart `app` (PR #95), which makes one address correct for
+# the template and for every chart rendered from it, permanently.
 #
-# ROLLOUT ORDER MATTERS. The portal still emits ROOT-scoped keys until slice S6,
-# so after this change its overlays read as violations. `mode: audit` is what
-# makes that safe: they are logged, not blocked, and they were already being
-# silently discarded by Helm — so nothing gets worse, and the audit log becomes
-# the detector for D3 rather than a silent failure. Do NOT flip to enforce until
-# S6 has landed, or every knob the wizard collects becomes a 422.
+# The set of tunable knobs is unchanged throughout; only the address is.
+#
+# CHART VERSION FLOOR. These keys only match umbrella >= 0.4.0. An app whose CI
+# has not re-published since that alias landed still keys its subchart after
+# itself, and its overlay reads as a violation here. `mode: audit` is what makes
+# that safe — logged, never blocked — and it is the reason the mode below has
+# not moved.
+#
+# DO NOT FLIP TO ENFORCE until (a) the portal sends alias-scoped overlays
+# (slice S6) AND (b) every app in flight has re-published on umbrella >= 0.4.0.
+# An earlier revision of this comment said S6 alone unblocks the flip; that was
+# wrong, and flipping on that basis would 422 every legitimate overlay from an
+# app still on 0.3.0.
 #
 # Deliberately still locked, and worth naming so the omission reads as a
-# decision: `hex-scaffold.autoscaling.targetMemoryUtilizationPercentage` sits in
+# decision: `app.autoscaling.targetMemoryUtilizationPercentage` sits in
 # the same block as the CPU target but is not tunable. Widening the set is a
 # governance change, not a re-key, so it is not made here.
 #
-# Do NOT add a bare `hex-scaffold` entry. Allowlist matching is prefix-based, so
-# one blanket entry would make the whole subchart tunable — including
-# `hex-scaffold.postgres.bindBuildingBlock`, which decides which database's
-# credentials the app reads. That path is reserved and refused at the create
-# boundary regardless of this file (ADR-0023), but the two must not disagree.
+# Do NOT add a bare `app` entry. Allowlist matching is prefix-based, so one
+# blanket entry would make the whole subchart tunable — including
+# `app.postgres.bindBuildingBlock`, which decides which database's credentials
+# the app reads. That path is reserved and refused at the create boundary
+# regardless of this file and regardless of the subchart's name (ADR-0023), but
+# the two must not disagree.
 tunableAllowlist:
   mode: audit
   default:
     allowedKeys:
-      - hex-scaffold.replicaCount
-      - hex-scaffold.resources.requests.cpu
-      - hex-scaffold.resources.requests.memory
-      - hex-scaffold.resources.limits.cpu
-      - hex-scaffold.resources.limits.memory
-      - hex-scaffold.autoscaling.minReplicas
-      - hex-scaffold.autoscaling.maxReplicas
-      - hex-scaffold.autoscaling.targetCPUUtilizationPercentage
+      - app.replicaCount
+      - app.resources.requests.cpu
+      - app.resources.requests.memory
+      - app.resources.limits.cpu
+      - app.resources.limits.memory
+      - app.autoscaling.minReplicas
+      - app.autoscaling.maxReplicas
+      - app.autoscaling.targetCPUUtilizationPercentage
   environments:
     production:
       allowedKeys:
-        - hex-scaffold.resources.requests.cpu
-        - hex-scaffold.resources.requests.memory
+        - app.resources.requests.cpu
+        - app.resources.requests.memory
     development:
       allowedKeys:
-        - hex-scaffold.resources.requests.cpu
-        - hex-scaffold.resources.requests.memory
-        - hex-scaffold.resources.limits.cpu
-        - hex-scaffold.resources.limits.memory
-        - hex-scaffold.autoscaling.minReplicas
-        - hex-scaffold.autoscaling.maxReplicas
-        - hex-scaffold.autoscaling.targetCPUUtilizationPercentage
-        - hex-scaffold.env
-        - hex-scaffold.nodeSelector
+        - app.resources.requests.cpu
+        - app.resources.requests.memory
+        - app.resources.limits.cpu
+        - app.resources.limits.memory
+        - app.autoscaling.minReplicas
+        - app.autoscaling.maxReplicas
+        - app.autoscaling.targetCPUUtilizationPercentage
+        - app.env
+        - app.nodeSelector
 
 # J3 resource policy (application dependencies — ADR-0023). Governs the
 # `resources[]` a create/deploy request may declare: which types, and within a

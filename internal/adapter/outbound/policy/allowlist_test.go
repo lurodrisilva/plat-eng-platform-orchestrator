@@ -10,7 +10,8 @@ import (
 
 // seedKeys is a fixture for the MECHANISM tests below (matching, flattening,
 // per-environment resolution). It no longer mirrors policies/default.yaml —
-// slice S7 re-scoped the shipped keys to the umbrella's `hex-scaffold.` alias.
+// slice S7 re-scoped the shipped keys to the umbrella's subchart, and they are
+// now prefixed with its `app` ALIAS.
 // Left root-scoped on purpose: these tests are about how a key set is applied,
 // not which keys ship, and TestShippedAllowlist_* covers the real file.
 var seedKeys = []string{
@@ -307,12 +308,21 @@ func TestShippedAllowlist_EveryKeyIsAliasScoped(t *testing.T) {
 			t.Errorf("%s: no allowlisted keys at all", env)
 		}
 		for _, k := range keys {
-			if !strings.HasPrefix(k, "hex-scaffold.") {
+			// `app.` is the umbrella's dependency ALIAS, which is the only prefix
+			// that can be static here. A chart NAME cannot: the scaffolder rewrites
+			// it, so `hex-scaffold.` (what S7 first shipped) matched the template
+			// chart and no application built from it — and Helm discards values
+			// addressed to a subchart key that does not exist, silently.
+			if !strings.HasPrefix(k, "app.") {
 				t.Errorf("%s: key %q is not scoped to the umbrella's subchart alias", env, k)
+			}
+			// Guard against re-introducing a chart-name prefix.
+			if strings.HasPrefix(k, "hex-scaffold") {
+				t.Errorf("%s: key %q is prefixed with a chart NAME; the scaffolder rewrites it", env, k)
 			}
 			// A bare alias entry would make the whole subchart tunable, including
 			// the bind that decides which database's credentials the app reads.
-			if k == "hex-scaffold" {
+			if k == "app" {
 				t.Errorf("%s: a blanket %q entry makes every subchart value tunable", env, k)
 			}
 		}
@@ -322,8 +332,10 @@ func TestShippedAllowlist_EveryKeyIsAliasScoped(t *testing.T) {
 // The S7 DoD, against the shipped file: a legitimate development overlay is not
 // blocked, and a platform-locked knob is. `blocked` is only ever true in
 // enforce mode, so the verdict is computed in enforce here — the file itself
-// ships `audit` deliberately, because the portal still sends root-scoped keys
-// until S6 and enforcing now would turn every wizard knob into a 422.
+// ships `audit` deliberately, on two counts: the portal still sends root-scoped
+// keys until S6, and an app that has not re-published since umbrella 0.4.0
+// aliased its subchart still keys values after itself. Enforcing before both are
+// resolved turns every legitimate overlay into a 422.
 func TestShippedAllowlist_DoD_LegitimateOverlayVersusLockedKnob(t *testing.T) {
 	shipped := shippedAllowlist(t)
 	if shipped.Mode() != ModeAudit {
@@ -337,7 +349,7 @@ func TestShippedAllowlist_DoD_LegitimateOverlayVersusLockedKnob(t *testing.T) {
 	}
 
 	legit := map[string]any{
-		"hex-scaffold": map[string]any{
+		"app": map[string]any{
 			"resources": map[string]any{
 				"requests": map[string]any{"cpu": "100m", "memory": "256Mi"},
 				"limits":   map[string]any{"cpu": "500m", "memory": "512Mi"},
@@ -350,13 +362,13 @@ func TestShippedAllowlist_DoD_LegitimateOverlayVersusLockedKnob(t *testing.T) {
 	}
 
 	locked := map[string]any{
-		"hex-scaffold": map[string]any{"securityContext": map[string]any{"runAsNonRoot": false}},
+		"app": map[string]any{"securityContext": map[string]any{"runAsNonRoot": false}},
 	}
 	dec := enforcing.Validate(context.Background(), locked, "development")
 	if !dec.Reject {
 		t.Fatal("securityContext.runAsNonRoot is guardrail G4 and must be blocked")
 	}
-	if len(dec.Violations) != 1 || dec.Violations[0] != "hex-scaffold.securityContext.runAsNonRoot" {
+	if len(dec.Violations) != 1 || dec.Violations[0] != "app.securityContext.runAsNonRoot" {
 		t.Errorf("violations = %v, want exactly the alias-scoped locked key", dec.Violations)
 	}
 }
@@ -388,7 +400,7 @@ func TestShippedAllowlist_RootScopedOverlayIsReportedNotSilentlyAccepted(t *test
 func TestShippedAllowlist_ProductionStaysNarrowerThanDevelopment(t *testing.T) {
 	al := shippedAllowlist(t)
 	overlay := map[string]any{
-		"hex-scaffold": map[string]any{
+		"app": map[string]any{
 			"autoscaling": map[string]any{"maxReplicas": 20},
 		},
 	}

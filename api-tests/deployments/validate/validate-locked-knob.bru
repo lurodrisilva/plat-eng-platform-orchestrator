@@ -25,7 +25,7 @@ headers {
 body:json {
   {
     "values": {
-      "hex-scaffold": {
+      "app": {
         "replicaCount": 3,
         "securityContext": { "runAsNonRoot": false }
       }
@@ -48,12 +48,12 @@ tests {
 
   test("the locked knob is reported as a violation", function() {
     const body = res.getBody();
-    expect(body.violations).to.include("hex-scaffold.securityContext.runAsNonRoot");
+    expect(body.violations).to.include("app.securityContext.runAsNonRoot");
   });
 
-  test("allowlisted hex-scaffold.replicaCount is NOT a violation", function() {
+  test("allowlisted app.replicaCount is NOT a violation", function() {
     const body = res.getBody();
-    expect(body.violations).to.not.include("hex-scaffold.replicaCount");
+    expect(body.violations).to.not.include("app.replicaCount");
   });
 
   test("blocked iff enforce mode", function() {
