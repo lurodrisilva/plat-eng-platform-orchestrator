@@ -35,6 +35,10 @@ oci:
   # GHCR-public anonymously.
   registry: "${OCI_REGISTRY:-acrdevbf6cc837.azurecr.io}"
   repositoryPrefix: ""
+  # Where scaffolded apps publish their own umbrella charts (their release CI
+  # pushes here). Read-only for the orchestrator, anonymous, and NOT the same as
+  # `registry` above — that is where composed charts are published to.
+  appChartRepository: "${APP_CHART_REPOSITORY:-ghcr.io/lurodrisilva/helm-charts}"
 
 github:
   # GitHub App for the Phase F scaffold-new-app dispatch (ADR-0009). The
