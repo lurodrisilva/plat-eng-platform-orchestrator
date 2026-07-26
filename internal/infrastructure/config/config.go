@@ -72,6 +72,14 @@ type ArgoCD struct {
 type OCI struct {
 	Registry         string `yaml:"registry"`
 	RepositoryPrefix string `yaml:"repositoryPrefix"`
+	// AppChartRepository is where scaffolded applications publish their umbrella
+	// charts, without the chart name — e.g. ghcr.io/lurodrisilva/helm-charts.
+	//
+	// Not Registry: that one is where the orchestrator PUBLISHES the composed
+	// chart it hands to ArgoCD (ACR, pulled by workload identity). This is where
+	// it READS an app's own release output from, which is public GHCR and needs
+	// no credential. Empty degrades GET /apps/{name} to repository existence.
+	AppChartRepository string `yaml:"appChartRepository"`
 }
 
 type GitHub struct {

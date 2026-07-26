@@ -17,23 +17,61 @@ import (
 
 // Apps handles application-scaffolding HTTP endpoints. It dispatches an external
 // GitHub Actions workflow (via the scaffolder port) and reports whether the
-// scaffolded repository exists — it never clones, renders, or pushes (ADR-0009).
+// scaffolded repository exists and what it can deploy — it never clones,
+// renders, or pushes (ADR-0009).
 type Apps struct {
 	scaffolder     port.Scaffolder
+	repoReader     port.AppRepoReader
+	artifacts      port.AppArtifactResolver
+	chartRepo      string
 	validator      port.TokenValidator
 	resourcePolicy port.ResourcePolicyEvaluator
 	logger         *slog.Logger
 }
 
-// NewApps creates an apps HTTP handler. scaffolder may be nil (the endpoints
-// then answer 503); validator may be nil (the endpoints then fail closed 401).
-//
-// resourcePolicy may be nil, which REFUSES a create that declares resources
-// rather than skipping the gate — the scaffolded default becomes a real Azure
-// server on the app's first deploy, so an unconfigured policy must not be a
-// free pass. A create declaring no resources is unaffected.
-func NewApps(scaffolder port.Scaffolder, validator port.TokenValidator, resourcePolicy port.ResourcePolicyEvaluator, logger *slog.Logger) *Apps {
-	return &Apps{scaffolder: scaffolder, validator: validator, resourcePolicy: resourcePolicy, logger: logger}
+// AppsDeps carries the collaborators NewApps needs. A struct rather than a
+// parameter list because two of the fields are same-shaped optional interfaces
+// and swapping them positionally would compile.
+type AppsDeps struct {
+	// Scaffolder may be nil, which makes the endpoints answer 503.
+	Scaffolder port.Scaffolder
+
+	// RepoReader and Artifacts resolve what a scaffolded app can deploy. Either
+	// being nil (or ChartRepo being empty) degrades GET /apps/{name} to repo
+	// existence alone — reported as chartStatus "unavailable", never as "not
+	// published yet". The distinction matters: the portal offers Deploy on
+	// published, waits on awaiting-first-build, and should surface a problem on
+	// unavailable rather than waiting forever.
+	RepoReader port.AppRepoReader
+	Artifacts  port.AppArtifactResolver
+
+	// ChartRepo is the OCI repository scaffolded apps publish their umbrellas
+	// to, e.g. ghcr.io/lurodrisilva/helm-charts, without the chart name.
+	ChartRepo string
+
+	// Validator may be nil, which makes the endpoints fail closed with 401.
+	Validator port.TokenValidator
+
+	// ResourcePolicy may be nil, which REFUSES a create that declares resources
+	// rather than skipping the gate — the scaffolded default becomes a real
+	// Azure server on the app's first deploy, so an unconfigured policy must not
+	// be a free pass. A create declaring no resources is unaffected.
+	ResourcePolicy port.ResourcePolicyEvaluator
+
+	Logger *slog.Logger
+}
+
+// NewApps creates an apps HTTP handler.
+func NewApps(deps AppsDeps) *Apps {
+	return &Apps{
+		scaffolder:     deps.Scaffolder,
+		repoReader:     deps.RepoReader,
+		artifacts:      deps.Artifacts,
+		chartRepo:      deps.ChartRepo,
+		validator:      deps.Validator,
+		resourcePolicy: deps.ResourcePolicy,
+		logger:         deps.Logger,
+	}
 }
 
 type createAppRequest struct {
@@ -213,8 +251,20 @@ func (h *Apps) authorizeAppResources(ctx context.Context, logger *slog.Logger, r
 	return deploymentapp.ResourceSpec{}, nil
 }
 
+// Chart publication states reported by GET /api/v1/apps/{name}.
+//
+// Three states, not a boolean, because "we could not find out" is a different
+// answer from "it is not there yet" and only one of them means "keep waiting".
+// A registry outage reported as awaiting-first-build leaves the portal showing
+// "waiting for the app's first build" for a build that finished hours ago.
+const (
+	chartStatusPublished   = "published"
+	chartStatusAwaitingCI  = "awaiting-first-build"
+	chartStatusUnavailable = "unavailable"
+)
+
 // Status handles GET /api/v1/apps/{name} — reports whether the scaffolded
-// repository exists yet. Entra-authenticated.
+// repository exists yet and what it can deploy. Entra-authenticated.
 func (h *Apps) Status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := telemetry.Enrich(ctx, h.logger)
@@ -245,10 +295,96 @@ func (h *Apps) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"name":          status.Name,
 		"ready":         status.Exists,
 		"repoUrl":       status.RepoURL,
 		"defaultBranch": status.DefaultBranch,
-	})
+	}
+	// A repository that does not exist yet has nothing to look up, and asking
+	// the registry about it would answer "not published" — true, but for the
+	// wrong reason and one poll ahead of the truth.
+	if status.Exists {
+		h.describeDeployable(ctx, logger, status.Name, resp)
+	} else {
+		resp["chartPublished"] = false
+		resp["chartStatus"] = chartStatusAwaitingCI
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// describeDeployable fills in what the app can actually deploy: the umbrella
+// chart resolved from the app's own repository, the version its CI has
+// published, and the image that version runs (ADR-0023, decision 6).
+//
+// It never fails the request. Repository existence is the answer the portal
+// polls for and it has already been obtained; degrading the artifact detail to
+// chartStatus "unavailable" keeps that answer available while still telling the
+// caller the difference between "not yet" and "could not tell".
+func (h *Apps) describeDeployable(ctx context.Context, logger *slog.Logger, name string, resp map[string]any) {
+	resp["chartPublished"] = false
+
+	if h.repoReader == nil || h.artifacts == nil || h.chartRepo == "" {
+		resp["chartStatus"] = chartStatusUnavailable
+		return
+	}
+
+	// The chart's name comes from the repository, never from the app name. The
+	// repository carries a collision-avoidance suffix the chart does not, and a
+	// long app name is truncated to fit it — so `orders-v3-fcdc` publishes
+	// `orders-v3-umbrella`, and no reversal of the suffix is reliable.
+	umbrella, err := h.repoReader.ReadUmbrellaChart(ctx, name)
+	if err != nil {
+		logger.WarnContext(ctx, "could not read the app's umbrella chart",
+			slog.String("app", name), slog.String("error", err.Error()))
+		resp["chartStatus"] = chartStatusUnavailable
+		return
+	}
+	if umbrella.ChartName == "" {
+		// The repository exists but the scaffold workflow has not pushed its
+		// content yet — a real window, since the repo is created before the push.
+		resp["chartStatus"] = chartStatusAwaitingCI
+		return
+	}
+
+	chart := map[string]any{
+		"repository": h.chartRepo,
+		"name":       umbrella.ChartName,
+		// The umbrella values key the application subchart hangs under. Reported
+		// rather than assumed: the scaffolder substitutes `hex-scaffold` for the
+		// app's own name when it renders, so a caller that scopes a values
+		// overlay to a hardcoded alias writes a key Helm discards in silence.
+		"appValuesKey": umbrella.AppValuesKey,
+		"version":      "",
+	}
+	resp["chart"] = chart
+
+	published, err := h.artifacts.ResolveLatest(ctx, h.chartRepo, umbrella.ChartName, umbrella.AppValuesKey)
+	if err != nil {
+		logger.WarnContext(ctx, "could not resolve the app's published chart",
+			slog.String("app", name),
+			slog.String("chart", umbrella.ChartName),
+			slog.String("error", err.Error()))
+		resp["chartStatus"] = chartStatusUnavailable
+		return
+	}
+	if !published.Published {
+		resp["chartStatus"] = chartStatusAwaitingCI
+		return
+	}
+
+	chart["version"] = published.ChartVersion
+	resp["chartPublished"] = true
+	resp["chartStatus"] = chartStatusPublished
+	resp["image"] = map[string]any{
+		"repository": published.ImageRepository,
+		"tag":        published.ImageTag,
+		"digest":     published.ImageDigest,
+		// The commit the image was built from. A deployment needs provenance the
+		// domain will accept, and without this the caller has to supply a sha it
+		// does not have — which is how the portal ended up sending the template
+		// repository's HEAD for every application.
+		"sourceCommit": published.ImageSourceCommit,
+	}
 }

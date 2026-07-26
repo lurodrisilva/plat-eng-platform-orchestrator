@@ -45,7 +45,7 @@ func postApps(t *testing.T, h *Apps, authHeader, body string) *httptest.Response
 }
 
 func TestApps_Create_NilValidator_FailsClosed(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, nil, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Logger: discardLogger()})
 	rr := postApps(t, h, "Bearer whatever", `{"name":"my-app"}`)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
@@ -53,7 +53,7 @@ func TestApps_Create_NilValidator_FailsClosed(t *testing.T) {
 }
 
 func TestApps_Create_MissingBearer_Returns401(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Validator: stubValidator{}, Logger: discardLogger()})
 	rr := postApps(t, h, "", `{"name":"my-app"}`)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
@@ -61,7 +61,7 @@ func TestApps_Create_MissingBearer_Returns401(t *testing.T) {
 }
 
 func TestApps_Create_InvalidToken_Returns401(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, stubValidator{err: errStubReject}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Validator: stubValidator{err: errStubReject}, Logger: discardLogger()})
 	rr := postApps(t, h, "Bearer bad", `{"name":"my-app"}`)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rr.Code)
@@ -69,7 +69,7 @@ func TestApps_Create_InvalidToken_Returns401(t *testing.T) {
 }
 
 func TestApps_Create_NilScaffolder_Returns503(t *testing.T) {
-	h := NewApps(nil, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Validator: stubValidator{}, Logger: discardLogger()})
 	rr := postApps(t, h, "Bearer good", `{"name":"my-app"}`)
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rr.Code)
@@ -85,7 +85,7 @@ func TestApps_Create_HappyPath_Returns202(t *testing.T) {
 			RepoURL:    "https://github.com/lurodrisilva/my-app-t3st",
 		},
 	}
-	h := NewApps(fake, stubValidator{claims: port.OIDCClaims{ObjectID: "obj-1"}}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{claims: port.OIDCClaims{ObjectID: "obj-1"}}, Logger: discardLogger()})
 	rr := postApps(t, h, "Bearer good", `{"name":"my-app","team":"payments"}`)
 	if rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202 (body=%s)", rr.Code, rr.Body.String())
@@ -116,7 +116,7 @@ func TestApps_Create_HappyPath_Returns202(t *testing.T) {
 
 func TestApps_Create_InvalidName_Returns400(t *testing.T) {
 	fake := &fakeScaffolder{dispatchErr: errors.New(`invalid app name "Bad": must be lowercase`)}
-	h := NewApps(fake, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{}, Logger: discardLogger()})
 	rr := postApps(t, h, "Bearer good", `{"name":"Bad"}`)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rr.Code)
@@ -132,7 +132,7 @@ func TestApps_Status_HappyPath_Returns200(t *testing.T) {
 			DefaultBranch: "main",
 		},
 	}
-	h := NewApps(fake, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{}, Logger: discardLogger()})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/my-app", nil)
 	req.Header.Set("Authorization", "Bearer good")
@@ -159,7 +159,7 @@ func TestApps_Status_HappyPath_Returns200(t *testing.T) {
 }
 
 func TestApps_Status_NilValidator_FailsClosed(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, nil, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Logger: discardLogger()})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/apps/my-app", nil)
 	req.SetPathValue("name", "my-app")
 	rr := httptest.NewRecorder()
@@ -189,7 +189,7 @@ func (denyResources) Evaluate(context.Context, []port.ResourceRequest, string) p
 // scaffolded repo's default database shape.
 func TestApps_Create_PassesTheDeclaredDatabaseToTheScaffolder(t *testing.T) {
 	fake := &fakeScaffolder{dispatchResult: port.ScaffoldResult{AppName: "my-app", RepoName: "my-app-t3st"}}
-	h := NewApps(fake, stubValidator{}, allowResources{}, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{}, ResourcePolicy: allowResources{}, Logger: discardLogger()})
 
 	rr := postApps(t, h, "Bearer good",
 		`{"name":"my-app","team":"payments","resources":[{"type":"postgres","size":"medium","version":"15","storageMb":65536}]}`)
@@ -206,7 +206,7 @@ func TestApps_Create_PassesTheDeclaredDatabaseToTheScaffolder(t *testing.T) {
 // workflow's own defaults to apply.
 func TestApps_Create_NoResourcesLeavesTheScaffoldDefaults(t *testing.T) {
 	fake := &fakeScaffolder{dispatchResult: port.ScaffoldResult{AppName: "my-app", RepoName: "my-app-t3st"}}
-	h := NewApps(fake, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{}, Logger: discardLogger()})
 
 	if rr := postApps(t, h, "Bearer good", `{"name":"my-app","team":"payments"}`); rr.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", rr.Code)
@@ -221,7 +221,7 @@ func TestApps_Create_NoResourcesLeavesTheScaffoldDefaults(t *testing.T) {
 // very first deploy cannot succeed is worse than no repo.
 func TestApps_Create_RefusedResourceReturns422AndDispatchesNothing(t *testing.T) {
 	fake := &fakeScaffolder{}
-	h := NewApps(fake, stubValidator{}, denyResources{}, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: fake, Validator: stubValidator{}, ResourcePolicy: denyResources{}, Logger: discardLogger()})
 
 	rr := postApps(t, h, "Bearer good", `{"name":"my-app","team":"payments","resources":[{"type":"postgres"}]}`)
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -238,7 +238,7 @@ func TestApps_Create_RefusedResourceReturns422AndDispatchesNothing(t *testing.T)
 // An unconfigured resource policy refuses rather than skipping the gate: the
 // scaffolded default becomes a real Azure server on the app's first deploy.
 func TestApps_Create_NilResourcePolicyRefusesADeclaredResource(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, stubValidator{}, nil, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Validator: stubValidator{}, Logger: discardLogger()})
 
 	rr := postApps(t, h, "Bearer good", `{"name":"my-app","team":"payments","resources":[{"type":"postgres"}]}`)
 	if rr.Code != http.StatusUnprocessableEntity {
@@ -249,7 +249,7 @@ func TestApps_Create_NilResourcePolicyRefusesADeclaredResource(t *testing.T) {
 // A structurally invalid shape is a 400, not a 422: the caller can fix it by
 // editing the request rather than by asking for less.
 func TestApps_Create_InvalidResourceShapeReturns400(t *testing.T) {
-	h := NewApps(&fakeScaffolder{}, stubValidator{}, allowResources{}, discardLogger())
+	h := NewApps(AppsDeps{Scaffolder: &fakeScaffolder{}, Validator: stubValidator{}, ResourcePolicy: allowResources{}, Logger: discardLogger()})
 
 	rr := postApps(t, h, "Bearer good",
 		`{"name":"my-app","team":"payments","resources":[{"type":"postgres","size":"enormous"}]}`)

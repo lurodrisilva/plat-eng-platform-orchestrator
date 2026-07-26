@@ -186,6 +186,7 @@ func run() error {
 	// render+push runs in the workflow, not here. Nil when unconfigured, which
 	// makes POST /api/v1/apps answer 503.
 	var appsScaffolder port.Scaffolder
+	var appsRepoReader port.AppRepoReader
 	if cfg.GitHub.AppID != 0 && cfg.GitHub.PrivateKey != "" {
 		sc, err := github.NewScaffolder(github.ScaffolderConfig{
 			AppID:           cfg.GitHub.AppID,
@@ -201,6 +202,10 @@ func run() error {
 			return fmt.Errorf("build scaffolder: %w", err)
 		}
 		appsScaffolder = sc
+		// The same GitHub App installation reads a scaffolded repo's own
+		// deploy/umbrella/Chart.yaml, which is what GET /apps/{name} resolves the
+		// app's chart identity from (ADR-0023, decision 6).
+		appsRepoReader = sc
 		logger.Info("github scaffolder enabled",
 			slog.String("scaffolderRepo", cfg.GitHub.ScaffolderOwner+"/"+cfg.GitHub.ScaffolderRepo),
 			slog.String("workflow", cfg.GitHub.WorkflowFile),
@@ -209,7 +214,17 @@ func run() error {
 
 	// HTTP handler + router
 	deploymentHandler := handler.NewDeployment(app, validator, allowlist, logger)
-	appsHandler := handler.NewApps(appsScaffolder, validator, resourcePolicy, logger)
+	appsHandler := handler.NewApps(handler.AppsDeps{
+		Scaffolder: appsScaffolder,
+		RepoReader: appsRepoReader,
+		// The same OCI resolver that pulls the umbrella at deploy time also reads
+		// what an app has published — one registry client, one auth story.
+		Artifacts:      chartResolver,
+		ChartRepo:      cfg.OCI.AppChartRepository,
+		Validator:      validator,
+		ResourcePolicy: resourcePolicy,
+		Logger:         logger,
+	})
 	router := httpadapter.NewRouter(deploymentHandler, appsHandler, logger)
 
 	srv := &http.Server{
