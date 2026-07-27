@@ -34,13 +34,17 @@ func newValidateHandler(t *testing.T, mode string) *Deployment {
 	if err != nil {
 		t.Fatalf("NewTunableAllowlist: %v", err)
 	}
-	// app + validator are unused by the validate endpoint.
-	return NewDeployment(deploymentapp.Application{}, nil, al, nil)
+	// The validate endpoint is authenticated, so it needs a validator that
+	// accepts. Passing nil here would make every verdict test assert 401 and
+	// pass for the wrong reason — the auth boundary itself is covered by the
+	// dedicated 401 tests below, not by these.
+	return NewDeployment(deploymentapp.Application{}, stubValidator{}, al, discardLogger())
 }
 
 func postValidate(t *testing.T, h *Deployment, body string) (*httptest.ResponseRecorder, validateResponse) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments:validate", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer test-token")
 	rr := httptest.NewRecorder()
 	h.ValidateTunables(rr, req)
 	var resp validateResponse
@@ -109,7 +113,7 @@ func TestValidateTunables_PerEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTunableAllowlist: %v", err)
 	}
-	h := NewDeployment(deploymentapp.Application{}, nil, al, nil)
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{}, al, discardLogger())
 
 	body := `{"environment":%q,"values":{"autoscaling":{"maxReplicas":20}}}`
 
@@ -139,7 +143,7 @@ func TestValidateTunables_BadJSON(t *testing.T) {
 }
 
 func TestValidateTunables_NilAllowlist(t *testing.T) {
-	h := NewDeployment(deploymentapp.Application{}, nil, nil, nil)
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{}, nil, discardLogger())
 	rr, resp := postValidate(t, h, `{"values":{"securityContext":{"runAsNonRoot":false}}}`)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
@@ -335,5 +339,136 @@ func TestValidateTunables_CleanOverlayIsNotBlockedByTheReservedCheck(t *testing.
 	}
 	if len(resp.Violations) != 0 {
 		t.Errorf("violations = %v, want none", resp.Violations)
+	}
+}
+
+// --- P2: the two formerly-anonymous routes ----------------------------------
+//
+// Status and ValidateTunables answered 200 to a caller with no Authorization
+// header at all. Neither mutates anything, which is why it was tolerated, and
+// neither is public: Status returns an application's identity, team and
+// resources, and ValidateTunables returns a readout of the governance rules —
+// which knobs are locked per environment, which paths are reserved.
+//
+// Each route is asserted three ways. 401-on-missing alone would pass against a
+// handler that rejects an absent header but accepts any garbage string, and
+// 200-on-valid is what stops a "fix" that simply refuses everything.
+
+func getDeploymentStatus(t *testing.T, h *Deployment, authHeader string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/deployments/dep-1", nil)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	req.SetPathValue("id", "dep-1")
+	rr := httptest.NewRecorder()
+	h.Status(rr, req)
+	return rr
+}
+
+func TestStatus_MissingBearer_Returns401(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{}, nil, discardLogger())
+	if rr := getDeploymentStatus(t, h, ""); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestStatus_InvalidToken_Returns401(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{err: errStubReject}, nil, discardLogger())
+	if rr := getDeploymentStatus(t, h, "Bearer bad"); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// A nil validator must fail closed here too, not panic on the nil interface.
+func TestStatus_NilValidator_FailsClosed(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, nil, nil, discardLogger())
+	if rr := getDeploymentStatus(t, h, "Bearer whatever"); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// With a valid token the request reaches the query and fails on the missing
+// deployment instead — 404, not 401. That distinction is the point: it proves
+// the auth boundary passed rather than that everything is refused.
+func TestStatus_ValidToken_ReachesTheQuery(t *testing.T) {
+	app := deploymentapp.Application{
+		Queries: deploymentapp.Queries{
+			// capturingRepo.FindByID always answers ErrNotFound, which is exactly
+			// what makes this assertion meaningful: reaching it at all proves the
+			// request got past authenticate.
+			GetDeployment: deploymentapp.NewGetDeploymentHandler(&capturingRepo{}),
+		},
+	}
+	h := NewDeployment(app, stubValidator{}, nil, discardLogger())
+	rr := getDeploymentStatus(t, h, "Bearer good")
+	if rr.Code == http.StatusUnauthorized {
+		t.Fatalf("status = 401 with a valid token; the auth boundary is refusing everything")
+	}
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unknown deployment", rr.Code)
+	}
+}
+
+func TestValidateTunables_MissingBearer_Returns401(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeEnforce)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments:validate",
+		bytes.NewBufferString(`{"values":{"replicaCount":3}}`))
+	rr := httptest.NewRecorder()
+	h.ValidateTunables(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestValidateTunables_InvalidToken_Returns401(t *testing.T) {
+	al, err := policy.NewTunableAllowlist(policy.ModeEnforce, []string{"replicaCount"}, nil)
+	if err != nil {
+		t.Fatalf("NewTunableAllowlist: %v", err)
+	}
+	h := NewDeployment(deploymentapp.Application{}, stubValidator{err: errStubReject}, al, discardLogger())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments:validate",
+		bytes.NewBufferString(`{"values":{"replicaCount":3}}`))
+	req.Header.Set("Authorization", "Bearer bad")
+	rr := httptest.NewRecorder()
+	h.ValidateTunables(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestValidateTunables_NilValidator_FailsClosed(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, nil, nil, discardLogger())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/deployments:validate",
+		bytes.NewBufferString(`{"values":{}}`))
+	req.Header.Set("Authorization", "Bearer whatever")
+	rr := httptest.NewRecorder()
+	h.ValidateTunables(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+}
+
+// The verdict path still works for an authenticated caller. Without this, every
+// assertion above is satisfied by a handler that 401s unconditionally.
+func TestValidateTunables_ValidToken_Returns200(t *testing.T) {
+	h := newValidateHandler(t, policy.ModeEnforce)
+	rr, resp := postValidate(t, h, `{"values":{"replicaCount":3}}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if resp.Blocked {
+		t.Error("an allowed knob must not be blocked")
+	}
+}
+
+// A nil logger must not panic. Every route now runs through authenticate, which
+// logs on its refusal paths, and telemetry.Enrich passes a nil logger straight
+// through when the context carries no trace — so the endpoint that crashed
+// would have been the one refusing an unauthenticated caller.
+func TestNilLogger_AuthRefusalDoesNotPanic(t *testing.T) {
+	h := NewDeployment(deploymentapp.Application{}, nil, nil, nil)
+	if rr := getDeploymentStatus(t, h, "Bearer whatever"); rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
 	}
 }
