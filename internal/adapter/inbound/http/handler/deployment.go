@@ -25,8 +25,52 @@ type Deployment struct {
 
 // NewDeployment creates a deployment HTTP handler. allowlist may be nil (the
 // validate endpoint then reports no violations).
+//
+// A nil logger is replaced with the default rather than stored. Every handler
+// now runs through authenticate, which logs on the refusal paths, and
+// telemetry.Enrich returns its argument unchanged when the context carries no
+// trace — so a nil logger would reach slog and panic on the nil handler. The
+// endpoint that panics would be the one refusing an unauthenticated caller,
+// which is the worst possible place to crash.
 func NewDeployment(app deploymentapp.Application, validator port.TokenValidator, allowlist port.TunableAllowlist, logger *slog.Logger) *Deployment {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Deployment{app: app, validator: validator, allowlist: allowlist, logger: logger}
+}
+
+// authenticate runs the shared Entra fail-closed boundary. It returns the
+// verified claims and true when the caller is authenticated; otherwise it has
+// already written the 401 response and returns false.
+//
+// Identical in shape to (*Apps).authenticate. Both exist because the two
+// handlers hold their dependencies differently; the invariant they share is
+// that no /api/v1 route reaches its use case before this returns true.
+func (h *Deployment) authenticate(w http.ResponseWriter, r *http.Request, logger *slog.Logger) (port.OIDCClaims, bool) {
+	ctx := r.Context()
+
+	// Fail closed when the validator is unconfigured (ADR-0015): a nil validator
+	// means no Entra verifier was built at startup, so answering 401 keeps the
+	// endpoint shut rather than panicking on the nil interface.
+	if h.validator == nil {
+		logger.ErrorContext(ctx, "token validator is not configured; refusing the request")
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "authentication is not configured")
+		return port.OIDCClaims{}, false
+	}
+
+	token := extractBearer(r.Header.Get("Authorization"))
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing authorization header")
+		return port.OIDCClaims{}, false
+	}
+
+	claims, err := h.validator.Validate(ctx, token)
+	if err != nil {
+		logger.WarnContext(ctx, "OIDC validation failed", slog.String("error", err.Error()))
+		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", err.Error())
+		return port.OIDCClaims{}, false
+	}
+	return claims, true
 }
 
 type createRequest struct {
@@ -79,27 +123,8 @@ func (h *Deployment) Create(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := telemetry.Enrich(ctx, h.logger)
 
-	// Fail closed when the validator is unconfigured (ADR-0015). A nil validator
-	// means the deploy could not build an Entra verifier at startup; answering
-	// 401 keeps the endpoint shut rather than panicking on the nil interface —
-	// an unauthenticated create must never fall through to the use-case.
-	if h.validator == nil {
-		logger.ErrorContext(ctx, "token validator is not configured; refusing the request")
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "authentication is not configured")
-		return
-	}
-
-	// Validate OIDC token
-	token := extractBearer(r.Header.Get("Authorization"))
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing authorization header")
-		return
-	}
-
-	claims, err := h.validator.Validate(ctx, token)
-	if err != nil {
-		logger.WarnContext(ctx, "OIDC validation failed", slog.String("error", err.Error()))
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", err.Error())
+	claims, ok := h.authenticate(w, r, logger)
+	if !ok {
 		return
 	}
 
@@ -201,17 +226,7 @@ func (h *Deployment) Redeploy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	logger := telemetry.Enrich(ctx, h.logger)
 
-	if h.validator == nil {
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "authentication is not configured")
-		return
-	}
-	token := extractBearer(r.Header.Get("Authorization"))
-	if token == "" {
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing authorization header")
-		return
-	}
-	if _, err := h.validator.Validate(ctx, token); err != nil {
-		writeError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", err.Error())
+	if _, ok := h.authenticate(w, r, logger); !ok {
 		return
 	}
 
@@ -249,9 +264,17 @@ func (h *Deployment) triggerDeploy(ctx context.Context, logger *slog.Logger, id 
 	}()
 }
 
-// Status handles GET /api/v1/deployments/{id}.
+// Status handles GET /api/v1/deployments/{id}. Entra-authenticated: a
+// deployment record names the application, its team, and its resources, which
+// is not public information merely because reading it mutates nothing.
 func (h *Deployment) Status(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	logger := telemetry.Enrich(ctx, h.logger)
+
+	if _, ok := h.authenticate(w, r, logger); !ok {
+		return
+	}
+
 	id := r.PathValue("id")
 	if id == "" {
 		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", "missing deployment ID")
@@ -289,9 +312,16 @@ type validateResponse struct {
 
 // ValidateTunables handles POST /api/v1/deployments:validate — a non-mutating
 // dry-run of the J3 values-overlay checks for a target environment, for the
-// portal create wizard. Always returns 200 with the verdict; blocked = the
-// overlay would be rejected at create. Dev-open: no OIDC, no secrets, values
-// only.
+// portal create wizard. Returns 200 with the verdict to an authenticated
+// caller; blocked = the overlay would be rejected at create.
+//
+// Entra-authenticated like every other /api/v1 route. It was previously open on
+// the reasoning that it holds no secrets and mutates nothing, which was true
+// and beside the point: the response is a readout of the platform's governance
+// rules — which knobs are locked, per environment, and which paths are
+// reserved — so an anonymous caller could map the whole policy surface, and
+// probe it for changes, without ever signing in. "Non-mutating" is not the same
+// as "public".
 //
 // Two checks, and they do NOT share a mode. The tunable allowlist is
 // mode-dependent (audit logs, enforce blocks). Platform-reserved paths are
@@ -300,6 +330,12 @@ type validateResponse struct {
 // would answer "not blocked" for a request create is certain to refuse, and
 // the portal would offer a Deploy button that cannot work.
 func (h *Deployment) ValidateTunables(w http.ResponseWriter, r *http.Request) {
+	logger := telemetry.Enrich(r.Context(), h.logger)
+
+	if _, ok := h.authenticate(w, r, logger); !ok {
+		return
+	}
+
 	var req validateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", fmt.Sprintf("invalid request: %v", err))
