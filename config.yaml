@@ -36,9 +36,19 @@ oci:
   registry: "${OCI_REGISTRY:-acrdevbf6cc837.azurecr.io}"
   repositoryPrefix: ""
   # Where scaffolded apps publish their own umbrella charts (their release CI
-  # pushes here). Read-only for the orchestrator, anonymous, and NOT the same as
-  # `registry` above — that is where composed charts are published to.
+  # pushes here). Read-only for the orchestrator, and NOT the same as `registry`
+  # above — that is where composed charts are published to.
   appChartRepository: "${APP_CHART_REPOSITORY:-ghcr.io/lurodrisilva/helm-charts}"
+  # Credential for reading those charts. This was anonymous, on the belief that
+  # the packages were public; scaffolded repositories are private, so their
+  # packages are private too, and GHCR answers 401 for a private chart and 401
+  # for one that was never pushed. Every app therefore reported "awaiting first
+  # build" indefinitely — including apps whose release CI had been green for days.
+  #
+  # APP_CHART_TOKEN is a secret and comes from the environment only (never this
+  # file); it needs `read:packages` and nothing else. Leave it unset to keep the
+  # reads anonymous, which still works for genuinely public charts.
+  appChartUsername: "${APP_CHART_USERNAME:-lurodrisilva}"
 
 github:
   # GitHub App for the Phase F scaffold-new-app dispatch (ADR-0009). The

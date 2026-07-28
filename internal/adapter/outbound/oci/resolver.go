@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/Masterminds/semver/v3"
 	"helm.sh/helm/v3/pkg/chart"
@@ -27,17 +28,104 @@ import (
 type Resolver struct {
 	client *registry.Client
 	logger *slog.Logger
+
+	// creds maps a registry host to the credential to log in with, and loggedIn
+	// records the hosts already logged in — helm's Login writes a credentials
+	// file, so repeating it per request is wasted work, not a correctness issue.
+	mu       sync.Mutex
+	creds    map[string]CredentialFunc
+	loggedIn map[string]bool
 }
 
-// NewResolver builds an OCI chart resolver. The registry client authenticates
-// from the ambient Docker/Helm config if present; public charts (the J3 case)
-// need no credential.
-func NewResolver(logger *slog.Logger) (*Resolver, error) {
+// ResolverOption configures a Resolver.
+type ResolverOption func(*Resolver)
+
+// WithHostCredential makes the resolver log in to host before reading from it.
+//
+// A scaffolded app's repository is PRIVATE, so the umbrella chart its release CI
+// pushes to GHCR is a private package. Read anonymously, GHCR answers 401 for a
+// private chart and 401 for a chart that was never pushed — the same status for
+// "you may not look" and "there is nothing there". That ambiguity is why
+// isNotPublished treats 401 as not-published, and why an app whose CI went green
+// days ago can sit in the portal reporting "waiting for the first build".
+//
+// Supplying a credential removes the ambiguity rather than papering over it:
+// authenticated, a missing repository is a 404 and a private one is readable.
+func WithHostCredential(host string, c CredentialFunc) ResolverOption {
+	return func(r *Resolver) {
+		if host == "" || c == nil {
+			return
+		}
+		if r.creds == nil {
+			r.creds = map[string]CredentialFunc{}
+		}
+		r.creds[host] = c
+	}
+}
+
+// NewResolver builds an OCI chart resolver. Without a host credential the
+// registry client authenticates from the ambient Docker/Helm config if present,
+// and reads anonymously otherwise.
+func NewResolver(logger *slog.Logger, opts ...ResolverOption) (*Resolver, error) {
 	client, err := registry.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("oci resolver: new registry client: %w", err)
 	}
-	return &Resolver{client: client, logger: logger}, nil
+	r := &Resolver{client: client, logger: logger, loggedIn: map[string]bool{}}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r, nil
+}
+
+// registryHost returns the host of an OCI repository reference — the segment
+// before the first slash of e.g. ghcr.io/lurodrisilva/helm-charts/x-umbrella.
+func registryHost(repository string) string {
+	host, _, _ := strings.Cut(repository, "/")
+	return host
+}
+
+// authenticated reports whether a credential is configured for repoRef's host.
+// The classification of a 401 depends on it: anonymous, 401 is ambiguous;
+// authenticated, it is a real authentication failure and must not be reported as
+// "not published yet".
+func (r *Resolver) authenticated(repoRef string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.creds[registryHost(repoRef)]
+	return ok
+}
+
+// ensureLogin logs in to repoRef's host once, if a credential is configured.
+// A login failure is returned rather than swallowed: continuing anonymously
+// would turn a bad credential into "not published yet", which is the exact
+// misreport this option exists to prevent.
+func (r *Resolver) ensureLogin(ctx context.Context, repoRef string) error {
+	host := registryHost(repoRef)
+
+	r.mu.Lock()
+	cred, ok := r.creds[host]
+	done := r.loggedIn[host]
+	r.mu.Unlock()
+
+	if !ok || done {
+		return nil
+	}
+
+	user, pass, err := cred(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire registry credential for %s: %w", host, err)
+	}
+	if err := r.client.Login(host, registry.LoginOptBasicAuth(user, pass)); err != nil {
+		return fmt.Errorf("registry login to %s: %w", host, err)
+	}
+
+	r.mu.Lock()
+	r.loggedIn[host] = true
+	r.mu.Unlock()
+
+	r.logger.InfoContext(ctx, "authenticated to registry", slog.String("host", host))
+	return nil
 }
 
 // Resolve selects the highest chart version satisfying constraint and pulls its
@@ -58,6 +146,10 @@ func NewResolver(logger *slog.Logger) (*Resolver, error) {
 // An exact prerelease ("0.2.0-sha-6d234ca") always matches itself.
 func (r *Resolver) Resolve(ctx context.Context, repository, name, constraint string, allowPre bool) (port.ResolvedChart, error) {
 	repoRef := path(repository, name)
+
+	if err := r.ensureLogin(ctx, repoRef); err != nil {
+		return port.ResolvedChart{}, fmt.Errorf("oci resolve: %w", err)
+	}
 
 	tags, err := r.client.Tags(repoRef)
 	if err != nil {

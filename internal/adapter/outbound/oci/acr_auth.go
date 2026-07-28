@@ -19,6 +19,22 @@ import (
 // an error aborts the push before any bytes are sent.
 type CredentialFunc func(ctx context.Context) (username, password string, err error)
 
+// StaticCredential returns a CredentialFunc for a fixed username/token pair —
+// GHCR read access to the private umbrella packages scaffolded apps publish.
+//
+// Unlike the ACR path above this is a long-lived secret rather than an exchanged
+// token, which is a real difference in kind and not just in mechanism. It is
+// used only for READS of app charts; the orchestrator still pushes to ACR
+// secretlessly via workload identity (ADR-0021 §3).
+func StaticCredential(username, token string) CredentialFunc {
+	return func(context.Context) (string, string, error) {
+		if token == "" {
+			return "", "", fmt.Errorf("static registry credential: empty token")
+		}
+		return username, token, nil
+	}
+}
+
 // ACR token exchange constants. The registry accepts an AAD access token scoped
 // to the ACR resource and returns an ACR refresh token; docker/helm basic auth
 // then carries that refresh token as the password under a well-known null GUID

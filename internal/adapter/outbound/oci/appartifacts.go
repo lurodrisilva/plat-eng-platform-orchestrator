@@ -29,9 +29,13 @@ func (r *Resolver) ResolveLatest(ctx context.Context, chartRepository, chartName
 	}
 	repoRef := path(chartRepository, chartName)
 
+	if err := r.ensureLogin(ctx, repoRef); err != nil {
+		return port.PublishedApp{}, fmt.Errorf("oci resolve latest: %w", err)
+	}
+
 	tags, err := r.client.Tags(repoRef)
 	if err != nil {
-		if isNotPublished(err) {
+		if r.isNotPublished(repoRef, err) {
 			r.logger.InfoContext(ctx, "app chart is not published yet",
 				slog.String("repository", repoRef),
 				slog.String("registryError", err.Error()))
@@ -142,20 +146,28 @@ func appImage(values map[string]any, appValuesKey string) (repository, tag, dige
 // about a chart nobody has pushed is told it is unauthorized. 403 and 404 are
 // folded in for registries that answer either.
 //
-// The compromise is deliberate and worth naming: a genuinely broken credential
-// is indistinguishable from an unpublished chart at this boundary, so a
-// credential fault will read as "waiting for the first build". The registry's
-// own error is logged at the call site so the difference stays diagnosable, and
-// the alternative — treating 401 as fatal — breaks the normal poll, which is the
-// case that happens on every single app.
-func isNotPublished(err error) bool {
+// That compromise only holds while the read is ANONYMOUS, and it cost real time:
+// every scaffolded app's repository is private, so its umbrella package is
+// private too, and on 2026-07-28 three apps whose release CI had been green for
+// days were all reporting "waiting for the first build" — for charts that were
+// pushed and sitting in GHCR. A 401 meaning "you may not look" was being read as
+// "there is nothing there", and the portal polls a waiting state forever.
+//
+// So the classification depends on whether a credential is configured for that
+// host. Authenticated, 401/403 is a real authentication failure and saying "not
+// published yet" would hide it; only 404 still means never pushed. Anonymous,
+// the old ambiguity is genuine and the old compromise stands — breaking the poll
+// for every app would be the worse trade.
+func (r *Resolver) isNotPublished(repoRef string, err error) bool {
 	var resp *errcode.ErrorResponse
 	if !errors.As(err, &resp) {
 		return false
 	}
 	switch resp.StatusCode {
-	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+	case http.StatusNotFound:
 		return true
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return !r.authenticated(repoRef)
 	default:
 		return false
 	}
