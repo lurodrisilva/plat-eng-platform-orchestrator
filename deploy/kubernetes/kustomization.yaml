@@ -3,13 +3,20 @@ kind: Kustomization
 
 # On-cluster deploy of the platform orchestrator (Phase G).
 #
-# The two ConfigMaps and the Secret this Deployment mounts are created at deploy
-# time, not here, so they stay DRY and secretless:
-#   - platform-orchestrator-config   ← kubectl create cm --from-file=../../config.yaml
-#   - platform-orchestrator-policies ← kubectl create cm --from-file=../../policies/default.yaml
-#   - platform-orchestrator-secrets  ← DOCUMENTDB_CONNECTION_STRING (from the ESO
-#       Key Vault) + ARGOCD_TOKEN (minted from argocd). externalsecret.yaml is the
-#       secretless target once the ESO ClusterSecretStore is fixed.
+# DEPLOY FROM THE REPO ROOT, NOT FROM HERE: `kubectl apply -k .` one level up.
+# The root kustomization layers this directory plus the two ConfigMaps the
+# Deployment mounts. Applying THIS directory on its own renders a Deployment
+# whose configMap volumes name ConfigMaps nothing creates — the pods then wedge
+# in ContainerCreating. The root kustomization explains why the generator has to
+# live up there rather than here.
+#
+# The Secret is still out of band: platform-orchestrator-secrets carries
+# DOCUMENTDB_CONNECTION_STRING (from the ESO Key Vault) + ARGOCD_TOKEN (minted
+# from argocd) + the GitHub App credentials. externalsecret.yaml is the
+# secretless target once the ESO ClusterSecretStore is fixed. That defect blocks
+# the SECRET only — it never blocked the two ConfigMaps, which is why they moved
+# under kustomize on 2026-07-28, after two policy changes reached this repo and
+# never reached the cluster.
 namespace: platform-orchestrator
 
 resources:
@@ -20,6 +27,6 @@ resources:
   # workload is hand-applied, so nothing reconciles this route: delete it and
   # the portal's API calls 404 with nothing to restore it and nothing reporting
   # it missing. Recorded, and the fast-follow is to bring this whole directory
-  # under ArgoCD once the ESO ClusterSecretStore defect lets the two ConfigMaps
-  # and the Secret be modelled here too.
+  # under ArgoCD once the ESO ClusterSecretStore defect lets the Secret be
+  # modelled here too.
   - httproute.yaml

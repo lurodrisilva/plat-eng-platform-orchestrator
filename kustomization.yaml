@@ -1,0 +1,50 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Deploy root for the platform orchestrator.
+#
+# WHY THIS IS AT THE REPO ROOT AND NOT IN deploy/kubernetes/.
+# The Deployment mounts two ConfigMaps whose content lives outside deploy/ —
+# `config.yaml` and `policies/default.yaml`, which are also what the service
+# reads when run locally. A configMapGenerator inside deploy/kubernetes/ would
+# have to reach them as `../../config.yaml`, and kustomize refuses to load files
+# above the kustomization root. ArgoCD enforces the same restriction, so
+# `--load-restrictor LoadRestrictionsNone` would work from a shell and then fail
+# the moment this directory is handed to ArgoCD. Rooting here keeps every input
+# at or below the root, which is the one arrangement both accept.
+#
+# WHAT THIS FIXES. These two ConfigMaps used to be created out of band with
+# `kubectl create cm --from-file=...`. Nothing reconciled them, so they held
+# whatever the repo looked like on the day someone last ran that command —
+# 2026-07-18. PR #22 re-keyed the tunable allowlist to the subchart alias on
+# 2026-07-26 and the cluster never saw it: on 2026-07-28 the live allowlist was
+# still the pre-S7 root-scoped set (`replicaCount`) while this repo held
+# `app.replicaCount`. The same apply also carried `oci.appChartRepository`,
+# absent from the live config since it was added, which had been degrading every
+# GET /api/v1/apps/{name} to chartStatus "unavailable".
+#
+# `tunableAllowlist.mode: audit` is why none of that surfaced as a failure:
+# legitimate portal overlays were merely recorded as violations. The enforce-flip
+# preconditions written in policies/default.yaml were therefore being reasoned
+# about against a policy that was not the one running.
+namespace: platform-orchestrator
+
+resources:
+  - deploy/kubernetes
+
+# The name suffix hash is load-bearing, not incidental. The orchestrator reads
+# its policy ONCE at startup — there is no fsnotify watch — so editing a
+# ConfigMap in place changes nothing until someone remembers to restart the
+# Deployment. Hashing the content into the name changes the volume reference,
+# which changes the pod template, which rolls the Deployment automatically. Edit
+# the policy, apply, and the running service is judging by it.
+#
+# Do NOT set disableNameSuffixHash: true here. It would restore the exact defect
+# this file exists to close: an applied policy that the running pods ignore.
+configMapGenerator:
+  - name: platform-orchestrator-config
+    files:
+      - config.yaml
+  - name: platform-orchestrator-policies
+    files:
+      - default.yaml=policies/default.yaml
