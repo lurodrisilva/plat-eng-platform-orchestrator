@@ -24,7 +24,20 @@ spec:
       serviceAccountName: platform-orchestrator
       containers:
         - name: server
-          image: acrdevbf6cc837.azurecr.io/platform-orchestrator-server:phase-f4
+          # PINNED BY DIGEST. This was `:phase-f4` — a mutable, hand-pushed tag
+          # with no provenance, and the reason a merged change sat undeployed
+          # without anyone noticing: nothing about the manifest said which code
+          # it ran. Built from master 8e331c5 for linux/amd64.
+          #
+          # Rebuild and repin with:
+          #   docker build --platform linux/amd64 -f Dockerfile.server \
+          #     -t acrdevbf6cc837.azurecr.io/platform-orchestrator-server:sha-$(git rev-parse --short=7 HEAD) .
+          #   az acr login -n acrdevbf6cc837 && docker push <that tag>
+          #   az acr repository show -n acrdevbf6cc837 --image <that tag> --query digest -o tsv
+          #
+          # --platform is not optional: an arm64 build lands on amd64 nodes as
+          # CrashLoopBackOff with "exec format error".
+          image: acrdevbf6cc837.azurecr.io/platform-orchestrator-server@sha256:93b996a17cef75168bf1ffd9d18508a51b3ee537c1db5a269195934ba7f06ce0
           ports:
             - name: http
               containerPort: 8080

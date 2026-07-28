@@ -7,3 +7,17 @@ metadata:
     # Enable the Azure workload-identity mutating webhook for pods here (belt-
     # and-braces; the pod also carries azure.workload.identity/use: "true").
     azure.workload.identity/use: "true"
+    # PERMITS THIS NAMESPACE TO PUBLISH ON THE PUBLIC ORIGIN. The
+    # platform-origin Gateway admits routes only from namespaces carrying this
+    # label; before it, any namespace on the cluster could claim a path on the
+    # public hostname, and a more specific path wins in Gateway API regardless
+    # of age — `/api/v1/deployments` beats this route's `/api/v1`.
+    #
+    # Each namespace is labelled by whoever creates it: Terraform labels
+    # control-plane-system, the ArgoCD Application labels platform-portal, and
+    # this kustomize creates this namespace, so the label belongs here.
+    #
+    # Remove it and httproute.yaml is refused QUIETLY — the condition appears in
+    # the route's own status, nothing above it looks unhealthy, and the symptom
+    # is a 404 on /api/v1 from the internet.
+    platform-origin/publish: "true"

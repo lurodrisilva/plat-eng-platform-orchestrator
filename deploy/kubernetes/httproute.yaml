@@ -1,0 +1,51 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: platform-orchestrator-api
+spec:
+  # The route lives in the WORKLOAD's namespace and attaches to a Gateway the
+  # platform owns. That is the split Gateway API's role model is for: the
+  # platform owns the origin, its certificate and who may publish on it; each
+  # workload owns the paths it exposes. No ReferenceGrant is needed — that
+  # governs cross-namespace backendRefs, not route-to-Gateway attachment.
+  #
+  # Attachment is admitted by the Gateway's allowedRoutes selector, which
+  # matches `platform-origin/publish: "true"` on this route's NAMESPACE
+  # (namespace.yaml). Without that label the route is refused QUIETLY: the
+  # condition lands in this object's own status while nothing above it looks
+  # unhealthy, and the symptom is a 404 on the public origin.
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: platform-origin
+      namespace: control-plane-system
+      # HTTPS only. Port 80 on that Gateway is the sole path an ACME HTTP-01
+      # challenge can take on this cluster (ADR-0026), and nothing else is put
+      # on it.
+      sectionName: https
+  hostnames:
+    - xpdev-portal-dev.westus2.cloudapp.azure.com
+  rules:
+    # ONE ORIGIN, TWO WORKLOADS (ADR-0024). The portal owns `/` and this owns
+    # `/api/v1`; because a more specific path wins in Gateway API, this rule
+    # takes the API traffic out of the portal's `/` without either side
+    # coordinating. That is also why the portal's nginx answers /api/ with a
+    # JSON 404: it is what the origin returns whenever this route is absent.
+    #
+    # The same-origin split is the entire point — the browser calls
+    # /api/v1/... on the page's own origin, so no CORS is involved and no
+    # preflight is sent. A response carrying Access-Control-Allow-Origin here
+    # would mean the design had silently become two origins.
+    #
+    # /healthz and /readyz are DELIBERATELY NOT PUBLISHED. P2 pinned them open
+    # because the kubelet sends no bearer token, which is safe while the
+    # audience is the kubelet; putting an endpoint that answers before auth is
+    # considered on a public origin is a different question, and this cluster
+    # has no rate-limiting carrier to blunt it.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1
+      backendRefs:
+        - name: platform-orchestrator-server
+          port: 8080

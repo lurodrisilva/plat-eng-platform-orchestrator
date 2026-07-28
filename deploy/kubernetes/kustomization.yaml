@@ -16,3 +16,10 @@ resources:
   - namespace.yaml
   - serviceaccount.yaml
   - server.yaml
+  # Publishes /api/v1 on the shared public origin (ADR-0024, slice P6). This
+  # workload is hand-applied, so nothing reconciles this route: delete it and
+  # the portal's API calls 404 with nothing to restore it and nothing reporting
+  # it missing. Recorded, and the fast-follow is to bring this whole directory
+  # under ArgoCD once the ESO ClusterSecretStore defect lets the two ConfigMaps
+  # and the Secret be modelled here too.
+  - httproute.yaml
