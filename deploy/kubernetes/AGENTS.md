@@ -22,14 +22,15 @@ Raw Kubernetes manifests for the server binary. The Deployment uses `serviceAcco
 - ArgoCD lives in `devops-system` (not `argocd`): `ARGOCD_APP_NAMESPACE=devops-system`, `ARGOCD_SERVER_URL=https://argocd-server.devops-system.svc`, `ARGOCD_INSECURE=true` (self-signed in-cluster cert; hardening follow-up: trust the argocd CA).
 - `image: ...:latest` — replace with immutable tag (sha or version) before production rollout.
 - `readOnlyRootFilesystem: true` requires writable tmpfs — if the server starts needing scratch space, add an `emptyDir` volume at `/tmp`.
-- ConfigMap `platform-orchestrator-config` must contain `config.yaml` (mirrors repo's `config.yaml`); ConfigMap `platform-orchestrator-policies` must contain `default.yaml`.
+- Deploy with `kubectl apply -k .` **from the repo root**, not from this directory. The root kustomization generates the two ConfigMaps from `config.yaml` and `policies/default.yaml`; applying this directory alone yields pods stuck in `ContainerCreating` on missing ConfigMaps.
+- Do not create those ConfigMaps by hand. They were `kubectl create cm --from-file=...` until 2026-07-28, and had frozen at their 2026-07-18 content: the live allowlist was still root-scoped `replicaCount` after PR #22 re-keyed it to `app.replicaCount` on 2026-07-26, and `oci.appChartRepository` had never arrived at all. `mode: audit` hid the first; the second silently degraded every `GET /api/v1/apps/{name}` to `chartStatus: "unavailable"`. The generator's name-suffix hash is what forces the rollout — the policy is read once at startup, so an in-place ConfigMap edit changes nothing until the pods restart.
 - `OTEL_SERVICE_NAME` env vars override `cfg.OTel.ServiceName` only if your config sources it (currently it does not — config wins). Keep them aligned with `config.yaml` to avoid surprise.
 - The async executor's concurrency is bounded by pod replicas × in-flight goroutines, not an external queue; a mid-flight restart is re-driven from persisted state via `POST /api/v1/deployments/{id}/deploy`.
 
 ## Dependencies
 
 ### External (cluster-side)
-- `Namespace`, `ServiceAccount platform-orchestrator`, `ConfigMap platform-orchestrator-config`, `ConfigMap platform-orchestrator-policies`, `Secret platform-orchestrator-secrets`
+- `Namespace`, `ServiceAccount platform-orchestrator`, `Secret platform-orchestrator-secrets`. The two ConfigMaps are no longer external — the root kustomization generates them.
 - An image registry reachable at `myregistry.azurecr.io`
 
 <!-- MANUAL: -->
