@@ -77,9 +77,24 @@ type OCI struct {
 	//
 	// Not Registry: that one is where the orchestrator PUBLISHES the composed
 	// chart it hands to ArgoCD (ACR, pulled by workload identity). This is where
-	// it READS an app's own release output from, which is public GHCR and needs
-	// no credential. Empty degrades GET /apps/{name} to repository existence.
+	// it READS an app's own release output from. Empty degrades GET /apps/{name}
+	// to repository existence.
 	AppChartRepository string `yaml:"appChartRepository"`
+
+	// AppChartUsername and AppChartToken authenticate the READ of those charts.
+	//
+	// This was documented as "public GHCR, needs no credential" and that was
+	// wrong: scaffolded repositories are private, so the umbrella packages their
+	// release CI pushes are private too. Anonymous, GHCR answers 401 for a
+	// private chart and 401 for one that was never pushed, so every app reported
+	// "awaiting first build" forever — including apps whose CI had been green for
+	// days. See WithHostCredential in the oci adapter.
+	//
+	// Unset leaves reads anonymous, which still works for genuinely public
+	// charts. AppChartToken is a secret and is populated from the environment in
+	// cmd/server/main.go, never from the config file.
+	AppChartUsername string `yaml:"appChartUsername"`
+	AppChartToken    string `yaml:"-"`
 }
 
 type GitHub struct {

@@ -71,40 +71,48 @@ func TestAppImage_MissingPiecesAreEmptyNotFatal(t *testing.T) {
 }
 
 func TestIsNotPublished(t *testing.T) {
+	// `want` is the anonymous verdict, `wantAuthed` the verdict once a credential
+	// is configured for the host. They differ exactly where the ambiguity lives:
+	// anonymous, GHCR's 401 could mean private-or-absent; authenticated, it can
+	// only mean the credential is bad, and calling that "not published" hides it.
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name       string
+		err        error
+		want       bool
+		wantAuthed bool
 	}{
 		{
 			// GHCR's actual answer for a chart nobody has pushed: the token
 			// exchange happens before existence is checked, so an anonymous
 			// client is told "unauthorized" rather than "not found".
-			name: "401 from GHCR for an unpublished chart",
-			err:  &errcode.ErrorResponse{StatusCode: http.StatusUnauthorized},
-			want: true,
+			name:       "401 from GHCR for an unpublished chart",
+			err:        &errcode.ErrorResponse{StatusCode: http.StatusUnauthorized},
+			want:       true,
+			wantAuthed: false,
 		},
 		{
-			name: "403",
-			err:  &errcode.ErrorResponse{StatusCode: http.StatusForbidden},
-			want: true,
+			name:       "403",
+			err:        &errcode.ErrorResponse{StatusCode: http.StatusForbidden},
+			want:       true,
+			wantAuthed: false,
 		},
 		{
-			name: "404 from a registry that answers honestly",
-			err:  &errcode.ErrorResponse{StatusCode: http.StatusNotFound},
-			want: true,
+			// 404 is unambiguous either way — the registry answered, and the
+			// answer was that nothing is there.
+			name:       "404 from a registry that answers honestly",
+			err:        &errcode.ErrorResponse{StatusCode: http.StatusNotFound},
+			want:       true,
+			wantAuthed: true,
 		},
 		{
 			// The distinction that matters: an outage must not read as "your app
 			// has not built yet", or the caller waits for a build that finished.
 			name: "503 is an outage, not an unpublished chart",
 			err:  &errcode.ErrorResponse{StatusCode: http.StatusServiceUnavailable},
-			want: false,
 		},
 		{
 			name: "a plain error is not a registry verdict",
 			err:  errors.New("dial tcp: connection refused"),
-			want: false,
 		},
 		{
 			// Wrapped errors still classify — helm returns the oras error, but a
@@ -114,12 +122,36 @@ func TestIsNotPublished(t *testing.T) {
 			want: true,
 		},
 	}
+
+	const repoRef = "ghcr.io/lurodrisilva/helm-charts/orders-v4-umbrella"
+	anon := &Resolver{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	authed := &Resolver{
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		creds:    map[string]CredentialFunc{"ghcr.io": StaticCredential("u", "t")},
+		loggedIn: map[string]bool{},
+	}
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isNotPublished(tc.err); got != tc.want {
-				t.Errorf("isNotPublished(%v) = %t, want %t", tc.err, got, tc.want)
+			if got := anon.isNotPublished(repoRef, tc.err); got != tc.want {
+				t.Errorf("anonymous isNotPublished(%v) = %t, want %t", tc.err, got, tc.want)
+			}
+			if got := authed.isNotPublished(repoRef, tc.err); got != tc.wantAuthed {
+				t.Errorf("authenticated isNotPublished(%v) = %t, want %t", tc.err, got, tc.wantAuthed)
 			}
 		})
+	}
+
+	// A credential for a DIFFERENT host must not change the verdict for this one.
+	// Otherwise configuring GHCR access would quietly re-classify ACR's 401s too.
+	other := &Resolver{
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		creds:    map[string]CredentialFunc{"acrdev.azurecr.io": StaticCredential("u", "t")},
+		loggedIn: map[string]bool{},
+	}
+	unauth := &errcode.ErrorResponse{StatusCode: http.StatusUnauthorized}
+	if !other.isNotPublished(repoRef, unauth) {
+		t.Error("a credential for another host must leave this host's 401 ambiguous")
 	}
 }
 

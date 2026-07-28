@@ -64,6 +64,11 @@ func run() error {
 	if v := os.Getenv("GITHUB_APP_PRIVATE_KEY"); v != "" {
 		cfg.GitHub.PrivateKey = v
 	}
+	// Read credential for the app umbrella charts (private GHCR packages, since
+	// scaffolded repositories are private). Unset leaves those reads anonymous.
+	if v := os.Getenv("APP_CHART_TOKEN"); v != "" {
+		cfg.OCI.AppChartToken = v
+	}
 
 	logger := telemetry.NewLogger(cfg.OTel.ServiceName + "-server")
 
@@ -93,7 +98,18 @@ func run() error {
 	// pushes the composed chart to ACR, which ArgoCD pulls via workload identity
 	// (secretless — ADR-0021 §3). The only long-lived credential is the ArgoCD
 	// API token, read from env above.
-	chartResolver, err := oci.NewResolver(logger)
+	// Authenticate reads of the app umbrella charts when a token is configured.
+	// Scaffolded repositories are private, so their published packages are too,
+	// and an anonymous 401 is indistinguishable from "never pushed" — which had
+	// every app reporting "awaiting first build" indefinitely.
+	var resolverOpts []oci.ResolverOption
+	if cfg.OCI.AppChartToken != "" && cfg.OCI.AppChartRepository != "" {
+		host, _, _ := strings.Cut(cfg.OCI.AppChartRepository, "/")
+		resolverOpts = append(resolverOpts, oci.WithHostCredential(
+			host, oci.StaticCredential(cfg.OCI.AppChartUsername, cfg.OCI.AppChartToken)))
+		logger.Info("authenticated app-chart reads enabled", slog.String("host", host))
+	}
+	chartResolver, err := oci.NewResolver(logger, resolverOpts...)
 	if err != nil {
 		return fmt.Errorf("build chart resolver: %w", err)
 	}
